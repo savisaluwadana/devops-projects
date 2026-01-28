@@ -1,0 +1,51 @@
+name: Build and Push
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up QEMU (for multi-arch)
+      uses: docker/setup-qemu-action@v2
+
+    - name: Login to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    - name: Build and push Backend
+      uses: docker/build-push-action@v4
+      with:
+        context: ./backend
+        push: true
+        tags: ${{ secrets.DOCKERHUB_USERNAME }}/springboot-api:${{ github.sha }}
+
+    - name: Build and push Frontend
+      uses: docker/build-push-action@v4
+      with:
+        context: ./frontend
+        push: true
+        tags: ${{ secrets.DOCKERHUB_USERNAME }}/nextjs-frontend:${{ github.sha }}
+
+    - name: Update Kubernetes Manifests
+      env:
+        MANIFESTS_REPO: https://github.com/your-user/k8s-manifests.git
+        IMAGE_BACKEND: ${{ secrets.DOCKERHUB_USERNAME }}/springboot-api:${{ github.sha }}
+        IMAGE_FRONTEND: ${{ secrets.DOCKERHUB_USERNAME }}/nextjs-frontend:${{ github.sha }}
+      run: |
+        git clone "https://x-access-token:${{ secrets.MANIFESTS_REPO_TOKEN }}@github.com/your-user/k8s-manifests.git" manifests
+        cd manifests
+        # Replace images in backend and frontend deployment yaml files (assumes placeholders)
+        sed -i "s|IMAGE_BACKEND_PLACEHOLDER|${IMAGE_BACKEND}|g" backend-deployment.yaml || true
+        sed -i "s|IMAGE_FRONTEND_PLACEHOLDER|${IMAGE_FRONTEND}|g" frontend-deployment.yaml || true
+        git config user.name "CI Bot"
+        git config user.email "ci@bot.com"
+        git add .
+        git commit -m "CI: update images to ${{ github.sha }}" || echo "no changes to commit"
+        git push origin HEAD:main

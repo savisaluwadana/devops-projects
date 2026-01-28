@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nextjs-frontend
+  labels:
+    app: nextjs-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nextjs-frontend
+  template:
+    metadata:
+      labels:
+        app: nextjs-frontend
+    spec:
+      containers:
+      - name: frontend
+        image: IMAGE_FRONTEND_PLACEHOLDER
+        ports:
+        - containerPort: 3000

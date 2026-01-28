@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: springboot-backend
+  labels:
+    app: springboot-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: springboot-backend
+  template:
+    metadata:
+      labels:
+        app: springboot-backend
+    spec:
+      containers:
+      - name: backend
+        image: IMAGE_BACKEND_PLACEHOLDER
+        ports:
+        - containerPort: 8080
+        env:
+        - name: SPRING_DATASOURCE_URL
+          value: jdbc:postgresql://postgres:5432/postgres
+        - name: SPRING_DATASOURCE_USERNAME
+          value: postgres
+        - name: SPRING_DATASOURCE_PASSWORD
+          value: example
