@@ -191,7 +191,85 @@ sudo systemctl start docker
 
 ## 2. Container Lifecycle
 
+### Understanding Container States
+
+A container's lifecycle goes through several well-defined states. Understanding these states is crucial for debugging, orchestration, and designing resilient applications.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                   CONTAINER STATE MACHINE                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│    ┌─────────┐    docker run    ┌─────────┐                     │
+│    │ Created │ ─────────────────▶│ Running │                     │
+│    └─────────┘                   └────┬────┘                     │
+│         ▲                             │                          │
+│         │ docker create              │ docker pause              │
+│         │                             ▼                          │
+│    ┌─────────┐                  ┌─────────┐                     │
+│    │  Image  │                  │ Paused  │                     │
+│    └─────────┘                  └────┬────┘                     │
+│                                       │ docker unpause           │
+│    ┌─────────┐    docker start       ▼                          │
+│    │ Stopped │ ◀──────────────  ┌─────────┐                     │
+│    │ (Exited)│                  │ Running │                     │
+│    └────┬────┘                  └────┬────┘                     │
+│         │                             │                          │
+│         │ docker rm                   │ docker stop/kill         │
+│         ▼                             ▼                          │
+│    ┌─────────┐                  ┌─────────┐                     │
+│    │ Removed │                  │ Stopped │                     │
+│    └─────────┘                  └─────────┘                     │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Container States Explained:**
+
+| State | Description |
+|-------|-------------|
+| **Created** | Container exists but hasn't started yet. The filesystem is ready, but no process is running. |
+| **Running** | Container's main process (PID 1) is actively executing. This is the normal operational state. |
+| **Paused** | Container's processes are suspended using cgroups freezer. Memory state is preserved but no CPU time is allocated. |
+| **Stopped/Exited** | Main process has terminated. Container still exists with its filesystem intact. Exit code indicates success (0) or failure (non-zero). |
+| **Removed** | Container is deleted. Filesystem and metadata are gone (unless volumes were used). |
+
+### The Ephemeral Nature of Containers
+
+Containers are designed to be **ephemeral** – they can be stopped, destroyed, and replaced by a new instance at any time. This design principle has profound implications:
+
+**What This Means in Practice:**
+- 📦 **Stateless by Default**: Containers should not store important data in their writable layer
+- 🔄 **Replaceable**: If a container is unhealthy, destroy it and create a new one
+- 🚀 **Fast Recovery**: Starting a new container is faster than fixing a broken one
+- 📊 **Scalable**: Run multiple identical containers behind a load balancer
+
+**The "Cattle vs Pets" Philosophy:**
+
+| Traditional Servers (Pets) | Containers (Cattle) |
+|---------------------------|---------------------|
+| Named individually (db-server-01) | Numbered (container-a1b2c3) |
+| Nursed back to health when sick | Replaced when unhealthy |
+| Carefully maintained | Recreated from images |
+| Downtime for updates | Rolling updates with zero downtime |
+
+### Container Isolation Levels
+
+Each container gets isolated resources:
+
+| Resource | Isolation Mechanism | What It Isolates |
+|----------|-------------------|------------------|
+| **Process Tree** | PID Namespace | Each container sees itself as PID 1 |
+| **Network** | Network Namespace | Own IP address, ports, routing tables |
+| **Filesystem** | Mount Namespace | Own root filesystem from image |
+| **Users** | User Namespace | UID 0 in container ≠ UID 0 on host |
+| **Hostname** | UTS Namespace | Own hostname and domain name |
+| **IPC** | IPC Namespace | Own semaphores, message queues |
+| **CPU/Memory** | cgroups | Resource limits and accounting |
+
 ### Running Containers
+
+The `docker run` command combines multiple operations: pulling an image (if needed), creating a container, and starting it.
 
 ```bash
 # Basic run
@@ -222,6 +300,19 @@ docker run -d \
   --health-interval=30s \
   nginx:alpine
 ```
+
+**Understanding Key Run Options:**
+
+| Option | Purpose | When to Use |
+|--------|---------|-------------|
+| `-d` (detach) | Run in background | Production servers, long-running services |
+| `-it` (interactive tty) | Attach terminal | Debugging, running commands |
+| `-p host:container` | Port mapping | Exposing services to host/network |
+| `-v` (volume) | Mount storage | Persisting data, sharing files |
+| `-e` (env) | Set variables | Configuration, secrets |
+| `--restart` | Auto-restart policy | Production reliability |
+| `--memory/--cpus` | Resource limits | Preventing resource exhaustion |
+| `--network` | Network attachment | Multi-container communication |
 
 ### Container Management
 
@@ -279,6 +370,86 @@ docker cp container_name:/var/log/ ./logs/
 ---
 
 ## 3. Images & Dockerfiles
+
+### Understanding Docker Images
+
+A Docker image is much more than just a file – it's a **layered, immutable snapshot** of a filesystem along with metadata describing how to run it. Understanding image architecture is fundamental to efficient Docker usage.
+
+**Image Layers Explained:**
+
+Every Docker image consists of multiple read-only layers stacked on top of each other. Each layer represents a filesystem change from a Dockerfile instruction.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    IMAGE LAYER ARCHITECTURE                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│    Container (running)                                          │
+│    ┌───────────────────────────────────────────────────────┐   │
+│    │  Writable Layer (Container Layer)                      │   │
+│    │  - All container writes go here                        │   │
+│    │  - Deleted when container is removed                   │   │
+│    └───────────────────────────────────────────────────────┘   │
+│                           ▲                                     │
+│    Image (read-only)      │                                     │
+│    ┌───────────────────────────────────────────────────────┐   │
+│    │  Layer 4: CMD ["nginx", "-g", "daemon off;"]          │   │
+│    ├───────────────────────────────────────────────────────┤   │
+│    │  Layer 3: COPY ./app /usr/share/nginx/html            │   │
+│    ├───────────────────────────────────────────────────────┤   │
+│    │  Layer 2: RUN apt-get install nginx                   │   │
+│    ├───────────────────────────────────────────────────────┤   │
+│    │  Layer 1: FROM ubuntu:22.04 (base image)              │   │
+│    └───────────────────────────────────────────────────────┘   │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Why Layers Matter:**
+
+| Benefit | Explanation |
+|---------|-------------|
+| **Sharing** | Multiple images can share the same base layers, saving disk space |
+| **Caching** | Docker caches layers, so rebuilds only recreate changed layers |
+| **Distribution** | Only new/changed layers need to be transferred when pulling |
+| **Immutability** | Layers never change after creation, ensuring consistency |
+
+### Image Tags and Naming
+
+Docker images use a naming convention that identifies where images come from and which version to use:
+
+```
+[registry/][repository/]name[:tag][@digest]
+```
+
+**Examples Explained:**
+
+| Full Name | Registry | Repository | Image | Tag |
+|-----------|----------|------------|-------|-----|
+| `nginx` | Docker Hub (default) | library (official) | nginx | latest (default) |
+| `nginx:1.25-alpine` | Docker Hub | library | nginx | 1.25-alpine |
+| `myuser/myapp:v1.0` | Docker Hub | myuser | myapp | v1.0 |
+| `gcr.io/project/app:latest` | gcr.io | project | app | latest |
+| `localhost:5000/myimage` | localhost:5000 | - | myimage | latest |
+
+**Tag Best Practices:**
+- ❌ **Avoid `latest`** in production – it's unpredictable
+- ✅ Use **semantic versioning** (`v1.2.3`) for releases
+- ✅ Use **Git SHA** for CI/CD builds for traceability
+- ✅ Use **date-based** tags for nightly builds
+
+### Image Registries
+
+A registry is a storage and distribution system for Docker images. Understanding registries is essential for sharing and deploying containers.
+
+| Registry | URL | Use Case |
+|----------|-----|----------|
+| **Docker Hub** | hub.docker.com | Default public registry, official images |
+| **GitHub Container Registry** | ghcr.io | GitHub integration, private repos |
+| **Amazon ECR** | *.dkr.ecr.*.amazonaws.com | AWS-native, integrated with ECS/EKS |
+| **Google Container Registry** | gcr.io | GCP-native, integrated with GKE |
+| **Azure Container Registry** | *.azurecr.io | Azure-native, integrated with AKS |
+| **Harbor** | self-hosted | Open-source, enterprise features |
 
 ### Image Management
 
@@ -513,6 +684,111 @@ DOCKER_BUILDKIT=1 docker build -t myapp .
 ---
 
 ## 4. Networking
+
+### Understanding Container Networking
+
+Docker networking allows containers to communicate with each other and the outside world. Understanding the networking model is crucial for designing microservices architectures.
+
+**The Container Network Model (CNM):**
+
+Docker implements its own networking model called the Container Network Model (CNM), which consists of three building blocks:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                  CONTAINER NETWORK MODEL (CNM)                   │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │   SANDBOX (Network Namespace)                             │  │
+│  │   - Isolated network stack                                │  │
+│  │   - Contains interfaces, routes, DNS                      │  │
+│  │   - Each container has its own sandbox                    │  │
+│  │                                                           │  │
+│  │   ┌──────────────────────────────────────────────────┐   │  │
+│  │   │  ENDPOINTS                                       │   │  │
+│  │   │  - Virtual network interfaces (veth pairs)       │   │  │
+│  │   │  - One end in container, one in Docker network   │   │  │
+│  │   │  - Containers can have multiple endpoints        │   │  │
+│  │   └──────────────────────────────────────────────────┘   │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                              │                                   │
+│                              ▼                                   │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │   NETWORK                                                 │  │
+│  │   - Group of endpoints that can communicate               │  │
+│  │   - Implemented by network drivers                        │  │
+│  │   - Provides DNS resolution between containers            │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Network Drivers Explained
+
+Docker provides several network drivers for different use cases:
+
+| Driver | Description | Use Cases |
+|--------|-------------|-----------|
+| **bridge** | Default. Creates a private internal network on the host. Containers connect via virtual bridge (docker0). | Single-host development, isolated applications |
+| **host** | Removes network isolation. Container uses host's network directly. Better performance but no isolation. | Performance-critical applications, debugging |
+| **none** | Completely disables networking. Container has only loopback interface. | Maximum security, offline processing |
+| **overlay** | Enables multi-host networking. Creates distributed network across Docker swarm nodes. | Docker Swarm, multi-node clusters |
+| **macvlan** | Assigns a MAC address to container, making it appear as physical device on network. | Legacy applications requiring direct network access |
+| **ipvlan** | Similar to macvlan but shares MAC address. Useful when MAC limits exist. | Environments with MAC address restrictions |
+
+### How Container-to-Container Communication Works
+
+**On the Same Network:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    BRIDGE NETWORK                                │
+│                                                                  │
+│    Container A                        Container B               │
+│    ┌──────────────┐                  ┌──────────────┐          │
+│    │  eth0        │                  │  eth0        │          │
+│    │  172.17.0.2  │                  │  172.17.0.3  │          │
+│    └──────┬───────┘                  └──────┬───────┘          │
+│           │ veth                            │ veth              │
+│           │                                 │                   │
+│    ═══════╧═════════════════════════════════╧════════════       │
+│                     Docker Bridge (docker0)                     │
+│                        172.17.0.1                               │
+│    ════════════════════════════════════════════════════════     │
+│                              │                                   │
+│                         NAT/iptables                            │
+│                              │                                   │
+│    ════════════════════════════════════════════════════════     │
+│                     Host Network Interface                      │
+│                              │                                   │
+│                          Internet                               │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**DNS Resolution:**
+Containers on user-defined networks can resolve each other by **container name** or **network alias**. This is called **service discovery**.
+
+```bash
+# Container "web" can reach container "db" by name
+docker exec web ping db  # Works because of built-in DNS
+```
+
+### Port Mapping Deep Dive
+
+Port mapping allows external access to container services:
+
+```
+Host Port       → Container Port
+-p 8080:80      → Request to host:8080 forwarded to container:80
+-p 127.0.0.1:8080:80  → Only localhost can access
+-p 8080-8090:80-90    → Port range mapping
+-P                     → Publish all EXPOSE ports to random host ports
+```
+
+**How It Works Internally:**
+
+1. Docker creates iptables rules to forward traffic
+2. Traffic to host port is DNATed to container's IP:port
+3. Response traffic is SNATed back to the client
 
 ### Network Types
 

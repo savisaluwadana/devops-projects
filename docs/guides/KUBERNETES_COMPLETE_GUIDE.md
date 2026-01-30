@@ -214,7 +214,59 @@ kubectl explain pod.spec.containers
 
 ## 2. Core Objects
 
-### Namespaces
+Understanding Kubernetes objects is essential for effective cluster management. Every resource in Kubernetes is represented as an object with a specific API structure.
+
+### The Kubernetes Object Model
+
+All Kubernetes objects share a common structure:
+
+```yaml
+apiVersion: <API group/version>   # Which API to use
+kind: <Resource type>             # What type of object
+metadata:                         # Object identification
+  name: <unique name>
+  namespace: <namespace>
+  labels: {}                      # Key-value pairs for selection
+  annotations: {}                 # Key-value pairs for metadata
+spec:                             # Desired state (what you want)
+status:                           # Current state (what Kubernetes reports)
+```
+
+**Key Principles:**
+
+| Concept | Description |
+|---------|-------------|
+| **Declarative** | You describe the desired state, Kubernetes makes it happen |
+| **Self-healing** | Controllers continuously reconcile current state to desired state |
+| **Labels & Selectors** | Loose coupling mechanism for grouping and selecting objects |
+| **Namespaces** | Virtual clusters for resource isolation and multi-tenancy |
+
+### Namespaces: Virtual Clusters
+
+Namespaces provide a mechanism for isolating groups of resources within a single physical cluster. They're like virtual clusters within a cluster.
+
+**When to Use Namespaces:**
+
+| Use Case | Example |
+|----------|---------|
+| **Environment separation** | `dev`, `staging`, `production` namespaces |
+| **Team isolation** | `team-backend`, `team-frontend` namespaces |
+| **Multi-tenancy** | Separate namespaces for different customers |
+| **Resource quotas** | Limit CPU/memory per namespace |
+
+**Default Namespaces:**
+
+| Namespace | Purpose |
+|-----------|---------|
+| `default` | Where objects go if no namespace is specified |
+| `kube-system` | Kubernetes system components (DNS, dashboard, etc.) |
+| `kube-public` | Publicly accessible resources (rarely used) |
+| `kube-node-lease` | Node heartbeat leases for node health |
+
+**What Namespaces DON'T Isolate:**
+- Network traffic (Pods can still communicate across namespaces)
+- Node resources
+- Cluster-scoped objects (Nodes, PersistentVolumes, ClusterRoles)
 
 ```yaml
 # namespace.yaml
@@ -234,7 +286,64 @@ kubectl delete namespace myns
 kubectl config set-context --current --namespace=myns
 ```
 
-### Pods
+### Pods: The Atomic Unit
+
+A Pod is the smallest deployable unit in Kubernetes – but understanding what that means requires some depth.
+
+**Why Pods, Not Containers?**
+
+A Pod represents a group of one or more containers that:
+- Share the same network namespace (same IP, can use localhost)
+- Share the same storage volumes
+- Are co-scheduled on the same node
+- Share the same lifecycle (created/destroyed together)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         POD ANATOMY                              │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │                      POD                                 │    │
+│  │  Pod IP: 10.244.1.5                                     │    │
+│  │                                                         │    │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐    │    │
+│  │  │ Container 1 │  │ Container 2 │  │ Container 3 │    │    │
+│  │  │  (main app) │  │   (sidecar) │  │    (init)   │    │    │
+│  │  │             │  │             │  │             │    │    │
+│  │  │  Port 8080  │  │  Port 9090  │  │  (exited)   │    │    │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘    │    │
+│  │         │                │                             │    │
+│  │         └────────────────┘                             │    │
+│  │      Shared localhost (127.0.0.1)                      │    │
+│  │                                                         │    │
+│  │  ┌──────────────────────────────────────────────────┐  │    │
+│  │  │          SHARED VOLUMES                          │  │    │
+│  │  │   /data  ←→  All containers can access           │  │    │
+│  │  └──────────────────────────────────────────────────┘  │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Pod Design Patterns:**
+
+| Pattern | Description | Example Use Case |
+|---------|-------------|------------------|
+| **Sidecar** | Helper container that enhances the main container | Log shipper, service mesh proxy |
+| **Ambassador** | Proxy container that simplifies external access | Database proxy, TLS termination |
+| **Adapter** | Container that transforms output from main container | Format converter, monitoring adapter |
+| **Init Container** | Runs before main containers, used for setup | Database migration, config fetching |
+
+**Pod Lifecycle Phases:**
+
+| Phase | Meaning |
+|-------|---------|
+| **Pending** | Pod accepted but containers not yet created (scheduling, image pulling) |
+| **Running** | At least one container is running |
+| **Succeeded** | All containers terminated successfully (exit code 0) |
+| **Failed** | All containers terminated, at least one failed (non-zero exit) |
+| **Unknown** | Cannot determine state (usually node communication failure) |
 
 ```yaml
 # pod.yaml
@@ -557,6 +666,102 @@ spec:
 ---
 
 ## 4. Services & Networking
+
+### Understanding Kubernetes Networking
+
+Kubernetes networking is fundamentally different from traditional networking. Understanding its model is essential for designing reliable applications.
+
+**The Kubernetes Networking Model:**
+
+Kubernetes imposes the following requirements:
+1. **All Pods can communicate with all other Pods** without NAT
+2. **All Nodes can communicate with all Pods** without NAT
+3. **The IP that a Pod sees itself as** is the same IP that others see it as
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              KUBERNETES NETWORKING OVERVIEW                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  EXTERNAL TRAFFIC                                               │
+│       │                                                         │
+│       ▼                                                         │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  LoadBalancer / Ingress Controller                      │   │
+│  │  (Layer 4/7 load balancing)                             │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│       │                                                         │
+│       ▼                                                         │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  Service (Virtual IP - ClusterIP)                       │   │
+│  │  - Stable IP for a group of Pods                        │   │
+│  │  - DNS: service.namespace.svc.cluster.local             │   │
+│  │  - Load balances traffic across Pods                    │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│       │ kube-proxy (iptables/IPVS rules)                       │
+│       ▼                                                         │
+│  ┌────────────┐ ┌────────────┐ ┌────────────┐                  │
+│  │   Pod 1    │ │   Pod 2    │ │   Pod 3    │                  │
+│  │ 10.244.1.5 │ │ 10.244.2.7 │ │ 10.244.1.9 │                  │
+│  └────────────┘ └────────────┘ └────────────┘                  │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Why Services Exist
+
+Pods are ephemeral – they come and go, getting new IP addresses each time. This creates a problem: how do other Pods find them?
+
+**Services solve this by:**
+- Providing a **stable DNS name** and **virtual IP** (ClusterIP)
+- **Load balancing** traffic across healthy Pod replicas
+- **Service discovery** through DNS or environment variables
+- **Decoupling** clients from the specific Pods serving them
+
+### Service Types Explained
+
+| Type | Description | Use Case |
+|------|-------------|----------|
+| **ClusterIP** | Internal-only IP (default). Accessible only within the cluster. | Internal services, databases, caches |
+| **NodePort** | Exposes service on each Node's IP at a static port (30000-32767). | Development, simple external access |
+| **LoadBalancer** | Creates external load balancer (cloud provider). Gets external IP. | Production web apps, external APIs |
+| **ExternalName** | Maps service to external DNS name (CNAME). | Accessing external services, migrations |
+| **Headless** | No ClusterIP (clusterIP: None). Returns Pod IPs directly. | StatefulSets, direct Pod access |
+
+### How kube-proxy Works
+
+Every Node runs `kube-proxy` which programs the Node's networking:
+
+**Modes of Operation:**
+
+| Mode | How It Works | Performance |
+|------|-------------|-------------|
+| **iptables** | Creates iptables rules for each Service. Chain of rules matches and DNATs traffic. | Good for <1000 Services |
+| **IPVS** | Uses Linux IPVS (IP Virtual Server) for load balancing. More efficient. | Better for large clusters |
+| **userspace** | Proxies traffic through kube-proxy process. Original, legacy mode. | Slowest, rarely used |
+
+### DNS in Kubernetes
+
+Kubernetes creates DNS records automatically for Services and Pods:
+
+```
+SERVICE DNS FORMAT:
+<service-name>.<namespace>.svc.cluster.local
+     │             │         │        │
+     │             │         │        └── Cluster domain
+     │             │         └── Fixed for Services
+     │             └── Namespace containing Service
+     └── Service name
+
+EXAMPLES:
+- postgres.database.svc.cluster.local
+- myapp.default.svc.cluster.local
+- redis.cache.svc.cluster.local
+
+POD DNS (for headless services):
+<pod-name>.<service-name>.<namespace>.svc.cluster.local
+- postgres-0.postgres.database.svc.cluster.local
+```
 
 ### Service Types
 
