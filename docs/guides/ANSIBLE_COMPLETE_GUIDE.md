@@ -273,32 +273,97 @@ A playbook is Ansible's configuration, deployment, and orchestration language. T
 
 ### Basic Structure
 
+This example shows a complete Ansible playbook with detailed explanations:
+
 ```yaml
+# ============================================================
+# ANSIBLE PLAYBOOK
+# ============================================================
+# A playbook is a YAML file containing one or more "plays".
+# Each play maps a group of hosts to tasks to execute.
+#
+# The '---' marks the start of a YAML document.
+# It's optional but conventional for playbooks.
+# ============================================================
 ---
-- name: Configure webservers
-  hosts: webservers
-  become: yes
+# --------------------------------------------------------
+# PLAY: Configure webservers
+# --------------------------------------------------------
+# This is a single "play" - it runs tasks on a group of hosts.
+# You can have multiple plays in one playbook, each targeting
+# different hosts with different tasks.
+- name: Configure webservers    # Descriptive name, shown in output
   
+  # HOSTS
+  # --------------------------------------------------------
+  # Which machines to run on. Must match your inventory file.
+  # Can be: 'all', 'webservers', 'db[0:5]', '!excluded_group'
+  hosts: webservers
+  
+  # BECOME (privilege escalation)
+  # --------------------------------------------------------
+  # Run tasks as root (sudo). Required for installing packages,
+  # managing services, etc. on most systems.
+  become: yes
+  # Alternative become options:
+  #   become_user: root     # Which user to become
+  #   become_method: sudo   # How to escalate (sudo, su, pbrun)
+  
+  # VARIABLES
+  # --------------------------------------------------------
+  # Define values to use throughout this play.
+  # These have higher precedence than defaults but lower
+  # than extra vars (--extra-vars on command line).
   vars:
     http_port: 80
   
+  # TASKS
+  # --------------------------------------------------------
+  # The list of actions to perform, in order.
+  # Each task calls a module with specific parameters.
+  # Tasks run sequentially, but across hosts in parallel.
   tasks:
+    # Task 1: Install nginx package
+    # ----------------------------------------------------
+    # - 'name': Description shown in output
+    # - 'apt': The Ansible module to use (package manager for Debian)
+    # - Parameters are module-specific:
+    #   - 'name': Package name to install
+    #   - 'state: present': Ensure package is installed
+    #                       (use 'absent' to remove)
     - name: Install nginx
       apt:
         name: nginx
         state: present
     
+    # Task 2: Ensure nginx is running
+    # ----------------------------------------------------
+    # 'service' module manages system services.
+    # - 'state: started': Ensure service is running now
+    # - 'enabled: yes': Start service on boot
+    #
+    # TIP: Add 'notify' to trigger handlers when a task
+    # makes a change. See handlers section below.
     - name: Start nginx
       service:
         name: nginx
         state: started
         enabled: yes
   
+  # HANDLERS
+  # --------------------------------------------------------
+  # Special tasks that ONLY run when "notified" by other tasks.
+  # Used for actions that should run once, at the end,
+  # regardless of how many tasks triggered them.
+  #
+  # Example use case: Reload nginx once after multiple config changes.
+  #
+  # To use: Add 'notify: Restart nginx' to any task.
   handlers:
-    - name: Restart nginx
+    - name: Restart nginx       # Name must match the 'notify' directive
       service:
         name: nginx
-        state: restarted
+        state: restarted        # Could also be 'reloaded' for config changes
 ```
 
 **Playbook Keywords Explained:**

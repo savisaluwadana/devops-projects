@@ -527,35 +527,97 @@ Deployments are the most common controller, ideal for stateless applications whe
 - **Rolling Updates**: Gradually replace old Pods with new ones
 - **Rollback**: Return to previous versions if something goes wrong
 - **Scaling**: Easily adjust Pod count (manual or auto)
+Below is a production-ready Deployment with detailed explanations:
 
 ```yaml
-# deployment.yaml
-apiVersion: apps/v1
-kind: Deployment
+# ============================================================
+# DEPLOYMENT MANIFEST
+# ============================================================
+# Every Kubernetes resource has these four required fields:
+# - apiVersion: Which API group and version to use
+# - kind: What type of resource this is
+# - metadata: Resource identification and organization
+# - spec: The desired state you want Kubernetes to maintain
+# ============================================================
+apiVersion: apps/v1     # apps/v1 is the stable API for Deployments
+kind: Deployment        # Resource type: manages ReplicaSets which manage Pods
 metadata:
-  name: myapp
-  labels:
-    app: myapp
+  name: myapp           # Unique name within the namespace (required)
+  labels:               # Labels are key-value pairs for organization
+    app: myapp          # Used to identify and select this resource
+
 spec:
+  # ----------------------------------------------------------
+  # REPLICA COUNT
+  # ----------------------------------------------------------
+  # How many identical Pods should be running at all times.
+  # Kubernetes will create/destroy Pods to maintain this count.
   replicas: 3
+
+  # ----------------------------------------------------------
+  # SELECTOR
+  # ----------------------------------------------------------
+  # Defines how the Deployment finds which Pods to manage.
+  # This MUST match the labels in the Pod template below.
+  # If they don't match, the Deployment won't work!
   selector:
     matchLabels:
       app: myapp
+
+  # ----------------------------------------------------------
+  # UPDATE STRATEGY
+  # ----------------------------------------------------------
+  # Controls how Pods are replaced during an update.
+  # 
+  # RollingUpdate (default): Gradually replace old with new
+  #   - maxSurge: How many extra Pods can exist during update
+  #     (1 = at most 4 Pods when updating from 3 replicas)
+  #   - maxUnavailable: How many Pods can be offline during update
+  #     (0 = all 3 must be running, new Pod starts before old dies)
+  #
+  # Recreate: Kill all old Pods, then create new ones
+  #   (causes downtime, use only when Pods can't coexist)
   strategy:
     type: RollingUpdate
     rollingUpdate:
       maxSurge: 1
       maxUnavailable: 0
+
+  # ----------------------------------------------------------
+  # POD TEMPLATE
+  # ----------------------------------------------------------
+  # This is the "recipe" for creating Pods. Every Pod created
+  # by this Deployment will be identical.
   template:
     metadata:
       labels:
-        app: myapp
+        app: myapp      # MUST match selector above!
     spec:
       containers:
-        - name: app
-          image: myapp:v1.0.0
+        - name: app     # Container name (for logs, exec commands)
+          image: myapp:v1.0.0  # ALWAYS use specific tags, never :latest
+
+          # --------------------------------------------------
+          # PORTS
+          # --------------------------------------------------
+          # Documents which ports the container listens on.
+          # This alone doesn't expose the port externally -
+          # you need a Service for that.
           ports:
             - containerPort: 8080
+
+          # --------------------------------------------------
+          # RESOURCE MANAGEMENT
+          # --------------------------------------------------
+          # Critical for production! Without limits, one Pod
+          # can consume all node resources and crash others.
+          #
+          # requests: Scheduler uses this to place Pods.
+          #   128Mi = Pod needs at least 128 megabytes RAM
+          #   100m = 100 millicores = 0.1 CPU cores
+          #
+          # limits: Hard ceiling. Exceeding memory = OOMKilled.
+          #   Exceeding CPU = throttled (not killed).
           resources:
             requests:
               memory: "128Mi"
@@ -563,26 +625,65 @@ spec:
             limits:
               memory: "256Mi"
               cpu: "200m"
+
+          # --------------------------------------------------
+          # LIVENESS PROBE
+          # --------------------------------------------------
+          # "Is the container still alive?"
+          # If this fails, Kubernetes RESTARTS the container.
+          # Use for detecting deadlocks or hung processes.
+          #
+          # initialDelaySeconds: Wait before first check
+          # periodSeconds: How often to check
           livenessProbe:
             httpGet:
               path: /health
               port: 8080
             initialDelaySeconds: 10
             periodSeconds: 10
+
+          # --------------------------------------------------
+          # READINESS PROBE
+          # --------------------------------------------------
+          # "Is the container ready to receive traffic?"
+          # If this fails, Kubernetes REMOVES the Pod from
+          # Service endpoints (no traffic sent to it).
+          #
+          # Different from liveness: Readiness doesn't restart,
+          # it just stops sending traffic until it recovers.
           readinessProbe:
             httpGet:
               path: /ready
               port: 8080
             initialDelaySeconds: 5
             periodSeconds: 5
+
+          # --------------------------------------------------
+          # ENVIRONMENT VARIABLES
+          # --------------------------------------------------
+          # Pass configuration to your application.
+          # valueFrom: Get value from Kubernetes (Pod name here).
+          # You can also use configMapKeyRef, secretKeyRef.
           env:
             - name: POD_NAME
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+
+          # --------------------------------------------------
+          # VOLUME MOUNTS
+          # --------------------------------------------------
+          # Where to mount volumes inside the container.
+          # /etc/config will contain files from the ConfigMap.
           volumeMounts:
             - name: config
               mountPath: /etc/config
+
+      # ------------------------------------------------------
+      # VOLUMES
+      # ------------------------------------------------------
+      # Define what storage is available to containers.
+      # This ConfigMap must exist in the same namespace.
       volumes:
         - name: config
           configMap:

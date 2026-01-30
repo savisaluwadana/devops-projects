@@ -574,34 +574,109 @@ RUN ["apt-get", "update"]        # Exec form (no shell)
 ### Complete Dockerfile Examples
 
 **Python Application:**
+
+This example demonstrates a production-ready Python Dockerfile with all best practices:
+
 ```dockerfile
+# --------------------------------------------------------
+# BASE IMAGE
+# --------------------------------------------------------
+# Using python:3.11-slim instead of python:3.11 reduces image size
+# from ~900MB to ~120MB. "slim" variants exclude dev tools.
 FROM python:3.11-slim
 
-# Set environment variables
+# --------------------------------------------------------
+# ENVIRONMENT VARIABLES
+# --------------------------------------------------------
+# PYTHONDONTWRITEBYTECODE=1: Prevents Python from creating .pyc files
+#   (bytecode cache), reducing container size and avoiding permission issues.
+#
+# PYTHONUNBUFFERED=1: Forces stdout/stderr to be unbuffered, so logs
+#   appear immediately in `docker logs` without delay.
+#
+# PIP_NO_CACHE_DIR=1: Prevents pip from caching downloaded packages,
+#   reducing image size since cached packages aren't needed at runtime.
+#
+# PIP_DISABLE_PIP_VERSION_CHECK=1: Stops pip from checking for updates,
+#   making builds faster and more deterministic.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
+# --------------------------------------------------------
+# WORKING DIRECTORY
+# --------------------------------------------------------
+# Sets /app as the working directory. All subsequent commands
+# (COPY, RUN, CMD) will execute relative to this path.
 WORKDIR /app
 
-# Install dependencies first (for caching)
+# --------------------------------------------------------
+# DEPENDENCY INSTALLATION (CACHE OPTIMIZATION)
+# --------------------------------------------------------
+# Copy ONLY requirements.txt first, before the full application code.
+# Docker caches each layer. If requirements.txt hasn't changed,
+# Docker reuses the cached pip install layer, making rebuilds
+# much faster (seconds instead of minutes).
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application
+# --------------------------------------------------------
+# APPLICATION CODE
+# --------------------------------------------------------
+# Now copy the rest of the application. This layer will be
+# rebuilt on every code change, but dependencies above are cached.
 COPY . .
 
-# Create non-root user
+# --------------------------------------------------------
+# SECURITY: NON-ROOT USER
+# --------------------------------------------------------
+# Running as root in containers is a security risk. If an attacker
+# escapes the container, they'd have root access to the host.
+# Creating a dedicated user with minimal privileges mitigates this.
+#
+# groupadd -r: Create a system group (-r means no home directory)
+# useradd -r: Create a system user
+# -g appgroup: Add user to the appgroup
+# chown -R: Change ownership of /app to the new user
 RUN groupadd -r appgroup && useradd -r -g appgroup appuser \
     && chown -R appuser:appgroup /app
 USER appuser
 
+# --------------------------------------------------------
+# PORT DOCUMENTATION
+# --------------------------------------------------------
+# EXPOSE is documentation only - it doesn't actually publish the port.
+# You still need -p 8000:8000 when running. But it tells users and
+# tools which port the application uses.
 EXPOSE 8000
 
+# --------------------------------------------------------
+# HEALTH CHECK
+# --------------------------------------------------------
+# Kubernetes and Docker use this to determine if the container is healthy.
+# --interval=30s: Check every 30 seconds
+# --timeout=3s:   Fail if check takes longer than 3 seconds
+# --start-period=5s: Wait 5s after container starts before checking
+#                    (gives app time to initialize)
+# --retries=3: Mark unhealthy after 3 consecutive failures
+#
+# The check itself makes an HTTP request to /health endpoint.
+# exit 1 signals unhealthy, exit 0 signals healthy.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
+# --------------------------------------------------------
+# STARTUP COMMAND
+# --------------------------------------------------------
+# CMD defines the default command when container starts.
+# Using exec form (JSON array) is preferred over shell form because:
+# 1. No shell interpretation of special characters
+# 2. Signals (SIGTERM) go directly to the process, enabling graceful shutdown
+#
+# gunicorn: Production WSGI server for Python apps
+# --bind 0.0.0.0:8000: Listen on all interfaces (required in containers)
+# app:create_app(): Application factory pattern
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", "app:create_app()"]
 ```
 

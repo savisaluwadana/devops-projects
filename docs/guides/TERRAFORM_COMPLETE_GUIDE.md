@@ -236,17 +236,39 @@ terraform destroy -auto-approve
 
 ### Basic Syntax
 
-```hcl
-# main.tf
+This example shows a complete Terraform configuration with detailed explanations:
 
-# Terraform settings
+```hcl
+# ============================================================
+# main.tf - Primary Terraform Configuration
+# ============================================================
+# Every Terraform project typically has:
+# - main.tf: Primary resources and configuration
+# - variables.tf: Input variable definitions
+# - outputs.tf: Output value definitions
+# - versions.tf: Provider version constraints
+# ============================================================
+
+# ------------------------------------------------------------
+# TERRAFORM BLOCK
+# ------------------------------------------------------------
+# The terraform block configures Terraform itself.
+# This MUST be the first block in your configuration.
 terraform {
+  # Minimum Terraform version required for this configuration.
+  # >= means "1.5.0 or newer" - helps prevent compatibility issues.
   required_version = ">= 1.5.0"
   
+  # --------------------------------------------------------
+  # PROVIDER REQUIREMENTS
+  # --------------------------------------------------------
+  # Declares which providers this config needs and from where.
+  # Terraform will download these during `terraform init`.
   required_providers {
     aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
+      source  = "hashicorp/aws"   # Registry path: namespace/provider
+      version = "~> 5.0"          # ~> 5.0 = >= 5.0.0 and < 6.0.0
+                                  # This is called "pessimistic constraint"
     }
     kubernetes = {
       source  = "hashicorp/kubernetes"
@@ -254,47 +276,84 @@ terraform {
     }
   }
   
+  # --------------------------------------------------------
+  # BACKEND CONFIGURATION
+  # --------------------------------------------------------
+  # Where to store the state file. For teams, ALWAYS use remote state!
+  # S3 + DynamoDB is the standard pattern for AWS.
   backend "s3" {
-    bucket         = "my-terraform-state"
-    key            = "state/terraform.tfstate"
+    bucket         = "my-terraform-state"      # S3 bucket name
+    key            = "state/terraform.tfstate" # Path in bucket
     region         = "us-east-1"
-    encrypt        = true
-    dynamodb_table = "terraform-locks"
+    encrypt        = true                      # Encrypt state at rest
+    dynamodb_table = "terraform-locks"         # For state locking
+    # Locking prevents concurrent runs from corrupting state
   }
 }
 
-# Provider configuration
+# ------------------------------------------------------------
+# PROVIDER CONFIGURATION
+# ------------------------------------------------------------
+# Providers are plugins that interact with cloud platforms.
+# Each provider has its own configuration options.
 provider "aws" {
-  region = var.aws_region
+  region = var.aws_region    # Use a variable for flexibility
   
+  # --------------------------------------------------------
+  # DEFAULT TAGS
+  # --------------------------------------------------------
+  # Applied automatically to ALL resources created by this provider.
+  # Saves you from adding tags to every resource block!
   default_tags {
     tags = {
       Environment = var.environment
-      ManagedBy   = "Terraform"
+      ManagedBy   = "Terraform"    # Easy to identify IaC resources
       Project     = var.project_name
     }
   }
 }
 
+# --------------------------------------------------------
+# PROVIDER ALIAS
+# --------------------------------------------------------
+# For multi-region deployments, create additional provider blocks
+# with aliases. Use them with: provider = aws.west
 provider "aws" {
-  alias  = "west"
-  region = "us-west-2"
+  alias  = "west"           # Reference with provider = aws.west
+  region = "us-west-2"      # Different region
 }
 
-# Local values
+# ------------------------------------------------------------
+# LOCAL VALUES
+# ------------------------------------------------------------
+# Locals are computed values you can reference throughout your config.
+# Use them to avoid repetition and for complex transformations.
 locals {
+  # --------------------------------------------------------
+  # REPEATED VALUES
+  # --------------------------------------------------------
+  # Define once, use everywhere. Easier to maintain!
   common_tags = {
     Environment = var.environment
     Team        = "Platform"
     CostCenter  = "12345"
   }
   
+  # String interpolation: Combine variables into a single string
   name_prefix = "${var.project_name}-${var.environment}"
   
-  # Conditional expression
+  # --------------------------------------------------------
+  # CONDITIONAL EXPRESSION
+  # --------------------------------------------------------
+  # Syntax: condition ? true_value : false_value
+  # Choose different values based on environment.
   instance_type = var.environment == "production" ? "t3.large" : "t3.micro"
   
-  # Complex transformations
+  # --------------------------------------------------------
+  # FOR EXPRESSIONS
+  # --------------------------------------------------------
+  # Transform collections. This extracts all subnet IDs into a list.
+  # [for item in collection : transformation]
   subnet_ids = [for s in aws_subnet.private : s.id]
 }
 ```
