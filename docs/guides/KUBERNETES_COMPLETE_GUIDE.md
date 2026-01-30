@@ -445,7 +445,88 @@ kubectl delete pod myapp --grace-period=0 --force
 
 ## 3. Workloads
 
+### Understanding Workload Controllers
+
+In Kubernetes, you rarely create Pods directly. Instead, you use **workload controllers** – higher-level abstractions that manage Pods for you. Controllers ensure your Pods match the desired state you specify.
+
+**Why Use Controllers Instead of Pods?**
+
+| Direct Pod Creation | Using Controllers |
+|---------------------|-------------------|
+| Pod dies → gone forever | Pod dies → controller creates new one |
+| Manual scaling | Declarative replica count |
+| No rolling updates | Zero-downtime deployments |
+| No health monitoring | Built-in self-healing |
+
+**The Controller Pattern:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                   CONTROLLER PATTERN                             │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│   You declare:                    Controller ensures:           │
+│   ┌─────────────────┐            ┌─────────────────┐            │
+│   │ Deployment      │            │ "I see 2 Pods   │            │
+│   │   replicas: 3   │  ──────▶   │  but need 3...  │            │
+│   └─────────────────┘            │  creating 1"    │            │
+│                                  └─────────────────┘            │
+│                                          │                       │
+│                                          ▼                       │
+│                    ┌──────┐ ┌──────┐ ┌──────┐                   │
+│                    │ Pod  │ │ Pod  │ │ Pod  │                   │
+│                    │  1   │ │  2   │ │  3   │ ← newly created   │
+│                    └──────┘ └──────┘ └──────┘                   │
+│                                                                  │
+│   This RECONCILIATION LOOP runs continuously!                   │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Choosing the Right Workload Controller
+
+| Controller | Use Case | Pod Identity | Scaling | Example |
+|------------|----------|--------------|---------|---------|
+| **Deployment** | Stateless apps, web servers | Interchangeable | Horizontal | Web apps, APIs |
+| **StatefulSet** | Stateful apps, databases | Persistent, ordered | Ordered | PostgreSQL, MongoDB, Kafka |
+| **DaemonSet** | One pod per node | Per-node | Auto (with nodes) | Log collectors, monitoring agents |
+| **Job** | Run-to-completion | Temporary | By parallelism | Batch processing, migrations |
+| **CronJob** | Scheduled tasks | Temporary | By schedule | Backups, cleanup jobs |
+
+**Decision Tree for Controller Selection:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              WHICH WORKLOAD CONTROLLER?                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│   Does the workload need to run on EVERY node?                  │
+│       └── YES ──────────────────────▶ DaemonSet                 │
+│       └── NO                                                     │
+│              │                                                   │
+│              ▼                                                   │
+│   Is it a one-time or scheduled task?                           │
+│       └── One-time task ────────────▶ Job                       │
+│       └── Scheduled task ───────────▶ CronJob                   │
+│       └── Long-running service                                   │
+│              │                                                   │
+│              ▼                                                   │
+│   Does it need stable identity/storage?                         │
+│       └── YES (database, queue) ────▶ StatefulSet               │
+│       └── NO (stateless) ───────────▶ Deployment                │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
 ### Deployment
+
+Deployments are the most common controller, ideal for stateless applications where any Pod can serve any request.
+
+**Key Deployment Features:**
+- **Replicas**: Run multiple identical Pods for high availability
+- **Rolling Updates**: Gradually replace old Pods with new ones
+- **Rollback**: Return to previous versions if something goes wrong
+- **Scaling**: Easily adjust Pod count (manual or auto)
 
 ```yaml
 # deployment.yaml
@@ -908,6 +989,98 @@ spec:
 ---
 
 ## 5. Storage
+
+### Understanding Kubernetes Storage
+
+Storage in Kubernetes is complex because containers are ephemeral, but data needs to persist. Kubernetes uses a sophisticated system of **Persistent Volumes (PV)** and **Persistent Volume Claims (PVC)** to decouple storage provisioning from consumption.
+
+**The Storage Challenge:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    WHY PVs AND PVCs?                             │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│   PROBLEM: Decoupling storage from application                  │
+│                                                                  │
+│   Developer says:          Admin provides:                      │
+│   "I need 10GB of          "Here's a 10GB volume                │
+│    fast storage"            from our SAN"                        │
+│         │                        │                               │
+│         ▼                        ▼                               │
+│   ┌───────────────┐        ┌───────────────┐                    │
+│   │ Persistent    │◀──────▶│ Persistent    │                    │
+│   │ Volume CLAIM  │ binds  │ Volume (PV)   │                    │
+│   │ (PVC)         │        │               │                    │
+│   │               │        │ - 10Gi        │                    │
+│   │ accessModes:  │        │ - ReadWrite   │                    │
+│   │   ReadWrite   │        │ - fast SSD    │                    │
+│   │ storage: 10Gi │        │               │                    │
+│   └───────────────┘        └───────────────┘                    │
+│         │                                                        │
+│         ▼                                                        │
+│   ┌───────────────┐                                              │
+│   │     Pod       │                                              │
+│   │  mounted at   │                                              │
+│   │  /data        │                                              │
+│   └───────────────┘                                              │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Storage Terminology:**
+
+| Term | Description |
+|------|-------------|
+| **PersistentVolume (PV)** | A piece of storage provisioned by an admin or dynamically. Cluster-wide resource. |
+| **PersistentVolumeClaim (PVC)** | A request for storage by a user. Binds to a PV. Namespace-scoped. |
+| **StorageClass** | Defines "classes" of storage (fast, slow, replicated). Enables dynamic provisioning. |
+| **Volume** | General term for directory accessible to containers in a Pod. Many types exist. |
+
+**Access Modes:**
+
+| Mode | Abbreviation | Description |
+|------|--------------|-------------|
+| **ReadWriteOnce** | RWO | Mounted read-write by a **single** node |
+| **ReadOnlyMany** | ROX | Mounted read-only by **many** nodes |
+| **ReadWriteMany** | RWX | Mounted read-write by **many** nodes |
+| **ReadWriteOncePod** | RWOP | Mounted read-write by a **single** Pod (K8s 1.22+) |
+
+**Reclaim Policies:**
+
+| Policy | What Happens When PVC is Deleted |
+|--------|----------------------------------|
+| **Retain** | PV is kept, data preserved. Admin must manually clean up. |
+| **Delete** | PV and underlying storage are deleted. Data is lost. |
+| **Recycle** | (Deprecated) Basic scrub (`rm -rf /volume/*`) then re-available. |
+
+### Static vs Dynamic Provisioning
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│           STATIC vs DYNAMIC PROVISIONING                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  STATIC PROVISIONING:                                           │
+│  1. Admin creates PV manually                                   │
+│  2. User creates PVC                                            │
+│  3. Kubernetes binds PVC to matching PV                         │
+│                                                                  │
+│  DYNAMIC PROVISIONING (Recommended):                            │
+│  1. Admin creates StorageClass                                  │
+│  2. User creates PVC with storageClassName                      │
+│  3. Kubernetes automatically provisions PV from cloud/storage   │
+│                                                                  │
+│   StorageClass (defines AWS EBS, GCP PD, etc.)                  │
+│         │                                                        │
+│         ▼ dynamic provisioning                                   │
+│   ┌───────────────┐        ┌───────────────┐                    │
+│   │     PVC       │──────▶ │ Auto-created  │                    │
+│   │               │        │      PV       │                    │
+│   └───────────────┘        └───────────────┘                    │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ### Persistent Volumes
 

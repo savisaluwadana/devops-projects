@@ -871,6 +871,91 @@ docker run --add-host host.docker.internal:host-gateway nginx
 
 ## 5. Storage & Volumes
 
+### The Data Persistence Challenge
+
+By default, all files created inside a container are stored in a **writable container layer**. This creates several problems:
+
+**Why Container Storage is Problematic:**
+
+| Problem | Explanation |
+|---------|-------------|
+| **Data Loss** | When a container is removed, its writable layer is deleted. All data is gone forever. |
+| **Not Shareable** | Data in one container cannot easily be accessed by another container. |
+| **Coupled to Host** | The container's storage driver is tied to the host machine. |
+| **Performance** | Union filesystems add overhead compared to direct filesystem access. |
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                THE DATA PERSISTENCE PROBLEM                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  WITHOUT VOLUMES:                                                │
+│                                                                  │
+│    Container A                      Container A (new)           │
+│    ┌─────────────┐    docker rm    ┌─────────────┐              │
+│    │ App Data    │ ─────────────▶  │ Empty!      │              │
+│    │ DB Files    │    + run        │ No data!    │              │
+│    │ Uploads     │                 │             │              │
+│    └─────────────┘                 └─────────────┘              │
+│         ❌ All data lost!                                        │
+│                                                                  │
+│  WITH VOLUMES:                                                   │
+│                                                                  │
+│    Container A                      Container B (new)           │
+│    ┌─────────────┐    docker rm    ┌─────────────┐              │
+│    │ App         │ ─────────────▶  │ App         │              │
+│    └─────┬───────┘    + run        └─────┬───────┘              │
+│          │ mount                         │ mount                 │
+│          ▼                               ▼                       │
+│    ┌─────────────────────────────────────────────┐              │
+│    │            VOLUME (persistent)               │              │
+│    │  DB Files, Uploads, Config files            │              │
+│    │           (survives container removal)      │              │
+│    └─────────────────────────────────────────────┘              │
+│         ✅ Data persists!                                        │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Storage Options Compared
+
+Docker provides three ways to store data:
+
+| Type | Location | Managed By | Persistence | Use Case |
+|------|----------|------------|-------------|----------|
+| **Volumes** | `/var/lib/docker/volumes/` | Docker | Yes | Production data, databases |
+| **Bind Mounts** | Anywhere on host | You | Yes | Development, config files |
+| **tmpfs** | Host memory (RAM) | Docker | No (until restart) | Secrets, temporary cache |
+
+**When to Use Each:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                CHOOSING STORAGE TYPE                             │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  VOLUMES (Recommended for most cases)                           │
+│  ✅ Best for: Databases, application data, shared data          │
+│  ✅ Docker manages them (easy backup, migration)                │
+│  ✅ Work on Linux and Windows containers                        │
+│  ✅ Can be shared among multiple containers                     │
+│  ✅ Volume drivers allow remote/cloud storage                   │
+│                                                                  │
+│  BIND MOUNTS                                                     │
+│  ✅ Best for: Dev environments, config files, source code       │
+│  ⚠️  Depends on host filesystem structure                       │
+│  ⚠️  Security risk (container can access host files)            │
+│  ✅ Changes reflect immediately (great for development)         │
+│                                                                  │
+│  TMPFS                                                           │
+│  ✅ Best for: Secrets, sensitive data, temporary cache          │
+│  ✅ Never written to disk (security)                            │
+│  ❌ Lost when container stops                                    │
+│  ❌ Cannot be shared between containers                         │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
 ### Volume Types
 
 ```
@@ -948,6 +1033,79 @@ docker run --mount type=tmpfs,destination=/app/temp,tmpfs-size=100m nginx
 ---
 
 ## 6. Docker Compose
+
+### Understanding Docker Compose
+
+Docker Compose is a tool for defining and running **multi-container Docker applications**. Instead of running each container separately with long `docker run` commands, you define your entire application stack in a single file.
+
+**Why Docker Compose?**
+
+| Challenge Without Compose | Solution With Compose |
+|---------------------------|----------------------|
+| Long `docker run` commands with many flags | All configuration in one YAML file |
+| Manual container start order | Automatic dependency management |
+| Hard to share development environments | `docker-compose.yml` is version controlled |
+| Manual network creation and linking | Networks created automatically |
+| Inconsistent local vs team environments | Everyone uses same configuration |
+
+**How Docker Compose Works:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                 DOCKER COMPOSE ARCHITECTURE                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│   docker-compose.yml                                             │
+│   ┌─────────────────────────────────────────────────────────┐   │
+│   │ version: '3.8'                                          │   │
+│   │ services:                                               │   │
+│   │   web:        ──────────▶  Container: myapp_web_1       │   │
+│   │   api:        ──────────▶  Container: myapp_api_1       │   │
+│   │   db:         ──────────▶  Container: myapp_db_1        │   │
+│   │   redis:      ──────────▶  Container: myapp_redis_1     │   │
+│   │ networks:                                               │   │
+│   │   frontend:   ──────────▶  Network: myapp_frontend      │   │
+│   │   backend:    ──────────▶  Network: myapp_backend       │   │
+│   │ volumes:                                                │   │
+│   │   db_data:    ──────────▶  Volume: myapp_db_data        │   │
+│   └─────────────────────────────────────────────────────────┘   │
+│                                                                  │
+│   $ docker-compose up                                            │
+│                       │                                          │
+│                       ▼                                          │
+│   ┌─────────────────────────────────────────────────────────┐   │
+│   │               RUNNING APPLICATION                        │   │
+│   │                                                          │   │
+│   │    ┌─────┐    ┌─────┐    ┌─────┐    ┌─────┐            │   │
+│   │    │ web │───▶│ api │───▶│ db  │    │redis│            │   │
+│   │    └─────┘    └─────┘    └─────┘    └─────┘            │   │
+│   │        │                     │                          │   │
+│   │        └─────────────────────┘                          │   │
+│   │               shared volume                             │   │
+│   └─────────────────────────────────────────────────────────┘   │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Key Compose Concepts:**
+
+| Concept | Description |
+|---------|-------------|
+| **Project** | A group of containers defined in one compose file. Named after directory by default. |
+| **Service** | A container configuration that can be scaled to multiple instances. |
+| **Network** | Virtual network for service communication. Created per project by default. |
+| **Volume** | Persistent storage that survives container restarts. |
+| **Profile** | Groups services that should only start in certain scenarios (e.g., debugging tools). |
+
+**Compose vs Kubernetes:**
+
+| Aspect | Docker Compose | Kubernetes |
+|--------|----------------|------------|
+| **Scope** | Single host | Multi-host cluster |
+| **Complexity** | Simple, easy to learn | Complex, steep learning curve |
+| **Scaling** | Manual or basic (`--scale`) | Auto-scaling, self-healing |
+| **Use Case** | Development, simple deployments | Production, large-scale systems |
+| **State** | Stateful by default | Prefers stateless, manages state specially |
 
 ### Compose File Reference
 

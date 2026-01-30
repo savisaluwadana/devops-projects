@@ -498,6 +498,73 @@ app_root: /var/www
 
 ## 7. Roles
 
+### Understanding Ansible Roles
+
+Roles are **self-contained, reusable units of automation**. They package tasks, handlers, variables, templates, and files together in a standardized structure. Think of roles as the building blocks of your infrastructure automation.
+
+**Why Use Roles?**
+
+| Without Roles | With Roles |
+|---------------|------------|
+| Long, monolithic playbooks | Modular, organized code |
+| Copy-paste code between projects | Reusable components |
+| Hard to test individual components | Isolated, testable units |
+| Inconsistent configurations | Standardized patterns |
+| Difficult collaboration | Clear responsibilities |
+
+**Role Architecture:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    ROLE STRUCTURE                                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  roles/nginx/                                                    │
+│  │                                                               │
+│  ├── defaults/main.yml    ← Default variables (lowest priority) │
+│  │                          Can be overridden by user            │
+│  │                                                               │
+│  ├── vars/main.yml        ← Variables (higher priority)         │
+│  │                          Internal role variables              │
+│  │                                                               │
+│  ├── tasks/main.yml       ← Main task list                      │
+│  │                          What the role actually does          │
+│  │                                                               │
+│  ├── handlers/main.yml    ← Handlers (service restarts, etc.)   │
+│  │                          Triggered by notify                  │
+│  │                                                               │
+│  ├── templates/           ← Jinja2 templates                    │
+│  │   └── nginx.conf.j2      Dynamically generated configs       │
+│  │                                                               │
+│  ├── files/               ← Static files                        │
+│  │   └── index.html         Copied as-is to target              │
+│  │                                                               │
+│  ├── meta/main.yml        ← Role metadata and dependencies      │
+│  │                          Specifies role dependencies          │
+│  │                                                               │
+│  └── README.md            ← Documentation                       │
+│                             How to use this role                 │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Role Execution Order:**
+
+When Ansible runs a role, it processes directories in this order:
+1. `meta/` - Load dependencies first
+2. `vars/` - Load role variables
+3. `defaults/` - Load default variables
+4. `tasks/` - Run the tasks
+5. Handlers are queued and run at end of play
+
+**Where to Find Roles:**
+
+| Source | Description |
+|--------|-------------|
+| **Ansible Galaxy** | Community roles repository (`ansible-galaxy install nginx`) |
+| **Private roles** | Your organization's internal roles in Git |
+| **Collections** | Curated bundles of roles and modules |
+
 ### Role Structure
 ```
 roles/nginx/

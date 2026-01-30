@@ -1031,6 +1031,77 @@ terraform output -raw vpc_id
 
 ## 6. Modules
 
+### Understanding Terraform Modules
+
+Modules are **reusable packages of Terraform configuration**. They're the primary way to compose, reuse, and organize infrastructure code. Think of them as functions in programming – they take inputs (variables), do something, and return outputs.
+
+**Why Modules?**
+
+| Problem Without Modules | Solution With Modules |
+|-------------------------|----------------------|
+| Copy-paste code between projects | Write once, use everywhere |
+| Inconsistent configurations | Standardized patterns |
+| Difficult to test and validate | Isolated, testable units |
+| Hard to understand large configs | Logical grouping of resources |
+| Duplicated bug fixes | Fix once, apply everywhere |
+
+**Module Hierarchy:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    MODULE HIERARCHY                              │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ROOT MODULE (your configuration)                               │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  main.tf                                                 │   │
+│  │  ┌─────────────────────────────────┐                    │   │
+│  │  │ module "vpc" {                  │ ───▶ Child Module  │   │
+│  │  │   source = "./modules/vpc"      │                    │   │
+│  │  │   cidr = "10.0.0.0/16"          │                    │   │
+│  │  │ }                               │                    │   │
+│  │  └─────────────────────────────────┘                    │   │
+│  │  ┌─────────────────────────────────┐                    │   │
+│  │  │ module "eks" {                  │ ───▶ Child Module  │   │
+│  │  │   source = "terraform-aws-      │                    │   │
+│  │  │            modules/eks/aws"     │                    │   │
+│  │  │   vpc_id = module.vpc.vpc_id    │                    │   │
+│  │  │ }                               │                    │   │
+│  │  └─────────────────────────────────┘                    │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                                                                  │
+│  CHILD MODULE (reusable component)                              │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  ./modules/vpc/                                          │   │
+│  │  ├── variables.tf   ← Inputs (parameters)               │   │
+│  │  ├── main.tf        ← Resources (implementation)        │   │
+│  │  ├── outputs.tf     ← Outputs (return values)           │   │
+│  │  └── versions.tf    ← Version constraints               │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Module Sources:**
+
+| Source Type | Example | Use Case |
+|-------------|---------|----------|
+| **Local Path** | `./modules/vpc` | Private modules in same repo |
+| **Terraform Registry** | `hashicorp/consul/aws` | Community/official modules |
+| **GitHub** | `github.com/org/repo//module` | Private GitHub repos |
+| **S3 Bucket** | `s3::https://bucket.s3.region.amazonaws.com/module.zip` | Private S3 storage |
+| **Git** | `git::https://example.com/module.git` | Any Git repository |
+
+**Module Design Principles:**
+
+| Principle | Description |
+|-----------|-------------|
+| **Single Responsibility** | Each module does one thing well (VPC, EKS, RDS) |
+| **Abstraction** | Hide complexity, expose simple interface |
+| **Flexibility** | Use variables with sensible defaults |
+| **Documentation** | README explains inputs, outputs, usage |
+| **Versioning** | Tag releases for stability |
+
 ### Module Structure
 
 ```

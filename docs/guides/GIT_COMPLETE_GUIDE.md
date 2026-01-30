@@ -805,7 +805,70 @@ git clean -i
 
 ## 6. Workflow Strategies
 
+### Understanding Git Workflows
+
+A Git workflow is a recipe or recommendation for how to use Git effectively. Choosing the right workflow depends on your team size, release cadence, and project complexity.
+
+**Why Workflows Matter:**
+
+| Problem Without Clear Workflow | Solution With Defined Workflow |
+|--------------------------------|-------------------------------|
+| Merge conflicts everywhere | Clear branching conventions |
+| "Who broke main?" | Protected branches, code review |
+| "Is this ready for production?" | Clear release process |
+| Inconsistent practices across team | Documented process everyone follows |
+
+**Workflow Comparison:**
+
+| Workflow | Best For | Complexity | Release Model |
+|----------|----------|------------|---------------|
+| **Git Flow** | Scheduled releases, versioned software | High | Release branches |
+| **GitHub Flow** | Continuous delivery, SaaS | Low | Main is always deployable |
+| **GitLab Flow** | Environment-based deployments | Medium | Environment branches |
+| **Trunk-Based** | High-performing teams, CI/CD | Low | Short-lived branches |
+
+**Decision Guide:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│            CHOOSING A GIT WORKFLOW                               │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  How often do you release?                                      │
+│      │                                                           │
+│      ├── Multiple times per day                                 │
+│      │       └── Trunk-Based Development or GitHub Flow         │
+│      │                                                           │
+│      ├── Weekly/Bi-weekly                                       │
+│      │       └── GitHub Flow or GitLab Flow                     │
+│      │                                                           │
+│      └── Scheduled releases (monthly, quarterly)                │
+│              └── Git Flow                                        │
+│                                                                  │
+│  Do you need multiple versions in production?                   │
+│      │                                                           │
+│      ├── YES (mobile apps, on-prem software)                    │
+│      │       └── Git Flow (supports hotfixes to old versions)   │
+│      │                                                           │
+│      └── NO (SaaS, single version)                              │
+│              └── GitHub Flow or Trunk-Based                      │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
 ### Git Flow
+
+Git Flow is best suited for projects with **scheduled releases** and the need to maintain **multiple versions** in production.
+
+**Branch Types in Git Flow:**
+
+| Branch | Purpose | Lifetime |
+|--------|---------|----------|
+| **main** | Production-ready code, tagged releases | Permanent |
+| **develop** | Integration branch for features | Permanent |
+| **feature/** | New features, branched from develop | Until feature complete |
+| **release/** | Prepare for release, bugfixes only | Until release |
+| **hotfix/** | Emergency fixes to production | Until fix deployed |
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
