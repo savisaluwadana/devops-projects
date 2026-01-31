@@ -191,9 +191,37 @@ sudo systemctl start docker
 
 ## 2. Container Lifecycle
 
+### The Philosophy Behind Container Lifecycle
+
+Containers represent a fundamental shift in how we think about running software. Unlike traditional servers or virtual machines that are treated as long-lived entities, containers embrace **immutability** and **disposability** as core principles.
+
+**The Immutable Infrastructure Paradigm:**
+
+In traditional infrastructure, when something goes wrong with a server, operators SSH in, diagnose the issue, apply fixes, and hope everything works. This creates **configuration drift** – the actual state of the server slowly diverges from the intended state documented in scripts or runbooks.
+
+Containers flip this model. Instead of fixing a broken container, you simply:
+1. **Destroy** the problematic container
+2. **Create** a new one from the same image
+
+This approach is called **immutable infrastructure** because:
+- The image (blueprint) never changes after it's built
+- Running containers are never modified in place
+- All changes require building a new image and redeploying
+
+**Why This Matters:**
+
+| Traditional Approach | Container Approach |
+|---------------------|-------------------|
+| "The server has been running for 847 days" is a badge of honor | Long-running containers are a smell – they might have drifted |
+| Manual hotfixes applied directly to production | All changes go through CI/CD pipeline |
+| Difficult to reproduce issues ("works on my machine") | Same image runs identically everywhere |
+| Rollback requires careful undoing of changes | Rollback = deploy the previous image |
+
 ### Understanding Container States
 
 A container's lifecycle goes through several well-defined states. Understanding these states is crucial for debugging, orchestration, and designing resilient applications.
+
+**What Happens at Each State Transition (Under the Hood):**
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -234,6 +262,72 @@ A container's lifecycle goes through several well-defined states. Understanding 
 | **Stopped/Exited** | Main process has terminated. Container still exists with its filesystem intact. Exit code indicates success (0) or failure (non-zero). |
 | **Removed** | Container is deleted. Filesystem and metadata are gone (unless volumes were used). |
 
+**What Happens During Each Transition (Deep Dive):**
+
+Understanding what Docker does internally helps you debug issues and design better container architectures:
+
+**1. Image → Created (`docker create`):**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ When you run 'docker create', Docker:                            │
+├─────────────────────────────────────────────────────────────────┤
+│ 1. Generates a unique container ID (64 hex characters)          │
+│ 2. Creates a writable layer on top of image layers              │
+│ 3. Allocates network namespace (but doesn't configure it yet)   │
+│ 4. Prepares mount points for volumes                             │
+│ 5. Records container metadata in /var/lib/docker/containers/    │
+│ 6. Does NOT start any processes                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**2. Created → Running (`docker start`):**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ When you run 'docker start', Docker:                             │
+├─────────────────────────────────────────────────────────────────┤
+│ 1. Creates Linux namespaces (pid, net, mnt, uts, ipc, user)     │
+│ 2. Sets up cgroups for resource limits                          │
+│ 3. Configures network interface and assigns IP                  │
+│ 4. Mounts the layered filesystem using OverlayFS                │
+│ 5. Mounts volumes at specified paths                            │
+│ 6. Executes the ENTRYPOINT/CMD as PID 1 inside container        │
+│ 7. Container process becomes a child of containerd-shim         │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**3. Running → Stopped (`docker stop` vs `docker kill`):**
+
+| Command | Signal Sent | Grace Period | Use Case |
+|---------|-------------|--------------|----------|
+| `docker stop` | SIGTERM, then SIGKILL | 10 seconds (configurable) | Graceful shutdown – allows cleanup |
+| `docker kill` | SIGKILL | None | Immediate termination – when container is stuck |
+
+```bash
+# Graceful stop with custom timeout
+docker stop --time 30 mycontainer  # Wait 30 seconds before SIGKILL
+
+# Why this matters: Databases, web servers, and queues need time to:
+# - Finish processing current requests
+# - Flush writes to disk
+# - Close network connections gracefully
+# - Notify peers they're going away
+```
+
+**4. Running → Paused (`docker pause`):**
+
+The pause feature uses the **cgroups freezer** subsystem. When paused:
+- All processes in the container are suspended (SIGSTOP equivalent)
+- Memory is preserved exactly as-is
+- No CPU cycles are consumed
+- Network connections remain open but no data is processed
+- File descriptors remain valid
+
+**Use cases for pausing:**
+- Debugging: Freeze state to inspect
+- Resource management: Temporarily free CPU for other work
+- Snapshotting: Create consistent filesystem snapshot
+- Testing: Simulate network partitions
+
 ### The Ephemeral Nature of Containers
 
 Containers are designed to be **ephemeral** – they can be stopped, destroyed, and replaced by a new instance at any time. This design principle has profound implications:
@@ -255,17 +349,115 @@ Containers are designed to be **ephemeral** – they can be stopped, destroyed, 
 
 ### Container Isolation Levels
 
-Each container gets isolated resources:
+Container isolation is what makes containers secure and predictable. Docker leverages **Linux kernel features** that have existed for years, combining them into a cohesive container runtime. Understanding these mechanisms helps you design secure applications and debug isolation-related issues.
 
-| Resource | Isolation Mechanism | What It Isolates |
-|----------|-------------------|------------------|
-| **Process Tree** | PID Namespace | Each container sees itself as PID 1 |
-| **Network** | Network Namespace | Own IP address, ports, routing tables |
-| **Filesystem** | Mount Namespace | Own root filesystem from image |
-| **Users** | User Namespace | UID 0 in container ≠ UID 0 on host |
-| **Hostname** | UTS Namespace | Own hostname and domain name |
-| **IPC** | IPC Namespace | Own semaphores, message queues |
-| **CPU/Memory** | cgroups | Resource limits and accounting |
+**The Two Pillars of Container Isolation:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│               CONTAINER ISOLATION ARCHITECTURE                   │
+├─────────────────────────┬───────────────────────────────────────┤
+│      NAMESPACES         │            CGROUPS                     │
+│  (What you can see)     │     (What you can use)                │
+├─────────────────────────┼───────────────────────────────────────┤
+│ • Isolate VISIBILITY    │ • Isolate RESOURCES                   │
+│ • Process trees         │ • CPU time                            │
+│ • Network interfaces    │ • Memory                              │
+│ • File systems          │ • Disk I/O                            │
+│ • User IDs              │ • Network bandwidth                   │
+│ • Hostnames             │ • Process count                       │
+└─────────────────────────┴───────────────────────────────────────┘
+```
+
+**Namespaces Explained In Detail:**
+
+| Namespace | What It Isolates | Why It Matters |
+|-----------|-----------------|----------------|
+| **PID Namespace** | Process IDs | Container sees its own process as PID 1. Cannot see or signal host processes. |
+| **Network Namespace** | Network stack | Container has own IP, routing table, firewall rules. Host ports are separate. |
+| **Mount Namespace** | Filesystem mounts | Container has own root filesystem. Cannot access host files unless mounted. |
+| **User Namespace** | User and group IDs | Root (UID 0) inside container can map to unprivileged user on host. |
+| **UTS Namespace** | Hostname/domain | Each container can have unique hostname without affecting host. |
+| **IPC Namespace** | Inter-process comms | Shared memory and semaphores are isolated between containers. |
+
+**How PID Namespace Works:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    PID NAMESPACE ISOLATION                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│    HOST VIEW:                         CONTAINER VIEW:           │
+│    ┌────────────────────┐             ┌────────────────────┐   │
+│    │ PID 1: systemd     │             │ PID 1: nginx       │   │
+│    │ PID 500: dockerd   │             │ PID 2: nginx worker│   │
+│    │ PID 1234: nginx ←──┼─────────────┼──────────────────┐ │   │
+│    │                    │             │                    │ │   │
+│    │ (container's nginx │             │ (nginx sees itself │ │   │
+│    │  is just another   │             │  as PID 1, the     │ │   │
+│    │  process, PID 1234)│             │  init process)     │ │   │
+│    └────────────────────┘             └────────────────────┘   │
+│                                                                  │
+│    Security Implication: Container cannot kill host processes   │
+│    because it cannot even see them!                             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**PID 1 Special Responsibilities:**
+When your application runs as PID 1 inside a container, it has special responsibilities:
+- **Signal Handling**: Must handle SIGTERM for graceful shutdown (default behavior often ignores it!)
+- **Zombie Reaping**: Must call `wait()` on child processes to prevent zombies
+- **This is why many images use** `tini` or `dumb-init` as an init process
+
+**Cgroups (Control Groups) Explained:**
+
+Cgroups limit, prioritize, and account for resource usage:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      CGROUPS HIERARCHY                           │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│    /sys/fs/cgroup/                                              │
+│    ├── cpu/                                                     │
+│    │   └── docker/                                              │
+│    │       └── <container-id>/                                  │
+│    │           ├── cpu.shares      (relative CPU weight)        │
+│    │           ├── cpu.cfs_quota   (hard CPU limit)             │
+│    │           └── cpu.cfs_period  (quota period)               │
+│    ├── memory/                                                  │
+│    │   └── docker/                                              │
+│    │       └── <container-id>/                                  │
+│    │           ├── memory.limit    (max memory)                 │
+│    │           ├── memory.usage    (current usage)              │
+│    │           └── memory.oom_control (OOM behavior)            │
+│    └── blkio/                                                   │
+│        └── docker/                                              │
+│            └── <container-id>/                                  │
+│                └── blkio.throttle  (disk I/O limits)            │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**What Happens When Limits Are Exceeded:**
+
+| Resource | When Limit Exceeded | Container Behavior |
+|----------|--------------------|--------------------|
+| **Memory** | Container uses more than `--memory` limit | OOM killer terminates container (exit code 137) |
+| **CPU** | Container tries to use more than `--cpus` | Container is throttled, not killed |
+| **PIDs** | More processes than `--pids-limit` | fork() calls fail with EAGAIN |
+| **Disk I/O** | Exceeds `--device-read-bps` or `--device-write-bps` | I/O operations are throttled |
+
+**Security Layers Beyond Namespaces:**
+
+Docker adds additional security mechanisms:
+
+| Layer | Purpose | Default State |
+|-------|---------|---------------|
+| **Seccomp** | Filters dangerous system calls | Enabled (blocks ~44 syscalls) |
+| **AppArmor/SELinux** | Mandatory access control | Enabled on supported systems |
+| **Capabilities** | Fine-grained root privileges | Only essential caps granted |
+| **Read-only rootfs** | Prevents filesystem modification | Optional (`--read-only`) |
 
 ### Running Containers
 
@@ -374,6 +566,100 @@ docker cp container_name:/var/log/ ./logs/
 ### Understanding Docker Images
 
 A Docker image is much more than just a file – it's a **layered, immutable snapshot** of a filesystem along with metadata describing how to run it. Understanding image architecture is fundamental to efficient Docker usage.
+
+**The Anatomy of a Docker Image:**
+
+A Docker image consists of several key components:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    DOCKER IMAGE ANATOMY                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │                    IMAGE MANIFEST                           ││
+│  │  - JSON document describing the image                       ││
+│  │  - Lists all layers (as SHA256 digests)                    ││
+│  │  - Specifies target architecture (amd64, arm64)            ││
+│  │  - References the config blob                               ││
+│  └─────────────────────────────────────────────────────────────┘│
+│                              │                                   │
+│                              ▼                                   │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │                    CONFIG BLOB                              ││
+│  │  - Created timestamp                                        ││
+│  │  - Author information                                       ││
+│  │  - Default environment variables                            ││
+│  │  - Default command (CMD) and entrypoint                    ││
+│  │  - Exposed ports, volumes, labels                          ││
+│  │  - Build history (each Dockerfile instruction)             ││
+│  └─────────────────────────────────────────────────────────────┘│
+│                              │                                   │
+│                              ▼                                   │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │                    LAYER BLOBS                              ││
+│  │  - Compressed tar archives (tar.gz)                        ││
+│  │  - Each contains filesystem changes from one instruction   ││
+│  │  - Identified by SHA256 content hash                       ││
+│  │  - Stored in /var/lib/docker/overlay2/                     ││
+│  └─────────────────────────────────────────────────────────────┘│
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Content-Addressable Storage:**
+
+Docker uses **content-addressable storage**, meaning every piece of data is identified by a cryptographic hash (SHA256) of its contents. This has profound implications:
+
+| Concept | How It Works | Benefit |
+|---------|-------------|---------|
+| **Deduplication** | Same content = same hash = stored only once | Multiple images sharing Ubuntu base use ONE copy |
+| **Integrity** | Hash validates content hasn't been corrupted | Tampered images fail verification |
+| **Caching** | Same Dockerfile instruction + same input = same hash | Rebuilds skip unchanged layers |
+| **Distribution** | Registry stores layers by hash | Pull only layers you don't have locally |
+
+**Understanding Copy-on-Write (CoW):**
+
+When a container runs, Docker creates a thin writable layer on top of the image layers using **OverlayFS** (or other storage drivers). This uses the copy-on-write strategy:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    COPY-ON-WRITE EXPLAINED                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│    READ operation:                                               │
+│    ┌─────────────────┐                                          │
+│    │  Upper (RW)     │─── File not here? ──▶ Look in lower     │
+│    ├─────────────────┤                                          │
+│    │  Lower (RO)     │─── Found! Read from here (fast)         │
+│    └─────────────────┘                                          │
+│                                                                  │
+│    WRITE operation (modifying existing file):                    │
+│    ┌─────────────────┐                                          │
+│    │  Upper (RW)     │◀── 2. Write modified copy here          │
+│    ├─────────────────┤                                          │
+│    │  Lower (RO)     │─── 1. Copy file up (copy-on-write)      │
+│    └─────────────────┘                                          │
+│                                                                  │
+│    DELETE operation:                                             │
+│    ┌─────────────────┐                                          │
+│    │  Upper (RW)     │◀── Create "whiteout" file (marks deleted)│
+│    ├─────────────────┤                                          │
+│    │  Lower (RO)     │─── Original file untouched              │
+│    └─────────────────┘                                          │
+│                                                                  │
+│    Key Insight: Lower layers NEVER change, enabling sharing!    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Why Image Immutability Matters:**
+
+| Scenario | Without Immutability | With Immutability |
+|----------|---------------------|-------------------|
+| Reproducing bugs | "The image was different when we deployed" | Same SHA256 = exact same image, always |
+| Security scanning | "We scanned it, but then it changed" | Scanned image hash matches deployed hash |
+| Rollbacks | "I hope the old version still exists somewhere" | Every version is a distinct, preserved image |
+| Caching | "Rebuild everything just in case" | Unchanged layers = cache hits |
 
 **Image Layers Explained:**
 
@@ -764,6 +1050,68 @@ DOCKER_BUILDKIT=1 docker build -t myapp .
 
 Docker networking allows containers to communicate with each other and the outside world. Understanding the networking model is crucial for designing microservices architectures.
 
+**Why Container Networking Is Different:**
+
+Containers don't have their own physical network interfaces. Instead, Docker creates **virtual networks** using Linux kernel features. When you run a container, Docker must solve three fundamental challenges:
+
+| Challenge | What It Means | Docker's Solution |
+|-----------|---------------|-------------------|
+| **Isolation** | Containers shouldn't see each other's traffic by default | Network namespaces create isolated network stacks |
+| **Connectivity** | Containers need to communicate when desired | Virtual ethernet pairs (veth) connect containers |
+| **External Access** | Containers need to reach the internet | NAT/masquerading through host's network |
+
+**The Linux Networking Stack Behind Docker:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              DOCKER NETWORKING INTERNALS                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│    Container A                    Container B                    │
+│    ┌──────────────┐              ┌──────────────┐               │
+│    │ eth0         │              │ eth0         │               │
+│    │ 172.17.0.2   │              │ 172.17.0.3   │               │
+│    └──────┬───────┘              └──────┬───────┘               │
+│           │                             │                        │
+│           │ veth pair                   │ veth pair              │
+│           │                             │                        │
+│    ┌──────┴─────────────────────────────┴──────┐                │
+│    │         DOCKER BRIDGE (docker0)           │                │
+│    │              172.17.0.1                   │                │
+│    │   (Linux bridge - like a virtual switch) │                │
+│    └────────────────────┬──────────────────────┘                │
+│                         │                                        │
+│    ┌────────────────────┴──────────────────────┐                │
+│    │             IPTABLES NAT                   │                │
+│    │  - MASQUERADE outbound container traffic  │                │
+│    │  - DNAT port mappings to containers       │                │
+│    │  - FORWARD rules for inter-container      │                │
+│    └────────────────────┬──────────────────────┘                │
+│                         │                                        │
+│    ┌────────────────────┴──────────────────────┐                │
+│    │         HOST NETWORK INTERFACE            │                │
+│    │    (eth0, en0, etc. - to internet)        │                │
+│    └───────────────────────────────────────────┘                │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Understanding veth Pairs:**
+
+A **veth pair** is like a virtual ethernet cable with two ends. Docker creates one for each container:
+- One end goes inside the container (appears as `eth0`)
+- Other end attaches to the Docker bridge (named `vethXXXXXX` on host)
+- Packets sent to one end emerge from the other
+
+```bash
+# See veth pairs on host
+ip link show type veth
+
+# See which container a veth belongs to
+docker exec <container> cat /sys/class/net/eth0/iflink
+# Match that number with the interface on host
+```
+
 **The Container Network Model (CNM):**
 
 Docker implements its own networking model called the Container Network Model (CNM), which consists of three building blocks:
@@ -800,7 +1148,7 @@ Docker implements its own networking model called the Container Network Model (C
 
 ### Network Drivers Explained
 
-Docker provides several network drivers for different use cases:
+Docker provides several network drivers for different use cases. Understanding when to use each is crucial:
 
 | Driver | Description | Use Cases |
 |--------|-------------|-----------|
@@ -810,6 +1158,90 @@ Docker provides several network drivers for different use cases:
 | **overlay** | Enables multi-host networking. Creates distributed network across Docker swarm nodes. | Docker Swarm, multi-node clusters |
 | **macvlan** | Assigns a MAC address to container, making it appear as physical device on network. | Legacy applications requiring direct network access |
 | **ipvlan** | Similar to macvlan but shares MAC address. Useful when MAC limits exist. | Environments with MAC address restrictions |
+
+**Bridge Driver Deep Dive:**
+
+The default bridge driver creates an isolated network on your host. Here's what happens when you create a bridge network:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                 BRIDGE NETWORK CREATION                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  docker network create mynetwork                                 │
+│                                                                  │
+│  What Docker does:                                               │
+│  1. Creates a Linux bridge interface (br-XXXX)                  │
+│  2. Assigns subnet from Docker's pool (default: 172.18.0.0/16)  │
+│  3. Configures iptables rules for NAT and forwarding            │
+│  4. Starts embedded DNS server for this network                 │
+│  5. Adds network metadata to Docker's database                  │
+│                                                                  │
+│  Default vs User-defined bridge:                                 │
+│  ┌──────────────────────┬──────────────────────────────────┐    │
+│  │ Default (docker0)    │ User-defined                     │    │
+│  ├──────────────────────┼──────────────────────────────────┤    │
+│  │ No automatic DNS     │ Built-in DNS by container name   │    │
+│  │ --link required      │ All containers can resolve each  │    │
+│  │ Legacy approach      │ Recommended approach             │    │
+│  └──────────────────────┴──────────────────────────────────┘    │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**How DNS Resolution Works (Service Discovery):**
+
+Docker's embedded DNS server (`127.0.0.11`) provides automatic name resolution on user-defined networks:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    DNS RESOLUTION FLOW                           │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Container "web" wants to connect to container "db"             │
+│                                                                  │
+│  1. Application calls: connect("db", 5432)                      │
+│                          │                                       │
+│  2. DNS lookup: db → ?   ▼                                       │
+│     ┌────────────────────────────────────────┐                  │
+│     │  Container's /etc/resolv.conf          │                  │
+│     │  nameserver 127.0.0.11                 │                  │
+│     └───────────────────┬────────────────────┘                  │
+│                         │                                        │
+│  3. Query to Docker DNS ▼                                        │
+│     ┌────────────────────────────────────────┐                  │
+│     │  Docker Embedded DNS Server            │                  │
+│     │  (running in dockerd process)          │                  │
+│     │                                        │                  │
+│     │  Checks: Is "db" a container name      │                  │
+│     │          on this network?              │                  │
+│     └───────────────────┬────────────────────┘                  │
+│                         │                                        │
+│  4. Response: db → 172.18.0.3                                    │
+│                         │                                        │
+│  5. TCP connection to 172.18.0.3:5432                            │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Port Mapping and iptables:**
+
+When you publish a port (`-p 8080:80`), Docker configures iptables NAT rules:
+
+```bash
+# Docker adds these iptables rules:
+
+# 1. DNAT rule - redirect incoming traffic to container
+iptables -t nat -A DOCKER -p tcp --dport 8080 \
+  -j DNAT --to-destination 172.17.0.2:80
+
+# 2. FORWARD rule - allow traffic to reach container
+iptables -A DOCKER -d 172.17.0.2 -p tcp --dport 80 -j ACCEPT
+
+# View Docker's iptables rules
+sudo iptables -t nat -L -n
+sudo iptables -L DOCKER -n
+```
 
 ### How Container-to-Container Communication Works
 
@@ -958,6 +1390,82 @@ By default, all files created inside a container are stored in a **writable cont
 | **Not Shareable** | Data in one container cannot easily be accessed by another container. |
 | **Coupled to Host** | The container's storage driver is tied to the host machine. |
 | **Performance** | Union filesystems add overhead compared to direct filesystem access. |
+
+**Understanding Where Container Data Lives:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                 DOCKER STORAGE ARCHITECTURE                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│    /var/lib/docker/                                             │
+│    ├── overlay2/           ← Image layers and container layers │
+│    │   ├── l/              ← Shortened layer IDs               │
+│    │   ├── <layer-id>/     ← Each layer's content              │
+│    │   └── <container-id>/ ← Container's writable layer        │
+│    │       ├── diff/       ← Changes made by container         │
+│    │       ├── merged/     ← Union view (what container sees)  │
+│    │       └── work/       ← OverlayFS working directory       │
+│    │                                                            │
+│    ├── volumes/            ← Named volumes                      │
+│    │   ├── mydata/                                              │
+│    │   │   └── _data/      ← Actual volume data                │
+│    │   └── metadata.db     ← Volume metadata                   │
+│    │                                                            │
+│    ├── containers/         ← Container configs and logs        │
+│    │   └── <container-id>/                                      │
+│    │       ├── config.v2.json                                   │
+│    │       └── <container-id>-json.log                          │
+│    │                                                            │
+│    └── image/              ← Image metadata                      │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Storage Drivers Explained:**
+
+Docker uses **storage drivers** to manage the layered filesystem. The choice of driver affects performance and compatibility:
+
+| Driver | Filesystem | Best For | Performance |
+|--------|------------|----------|-------------|
+| **overlay2** | xfs, ext4 | Default for modern Linux | Excellent |
+| **fuse-overlayfs** | Any | Rootless Docker | Good |
+| **btrfs** | btrfs | Btrfs filesystems | Good, native CoW |
+| **zfs** | zfs | ZFS filesystems | Good, native CoW |
+| **vfs** | Any | Testing only | Poor (no CoW) |
+
+**How OverlayFS Works (Deep Dive):**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                   OVERLAYFS INTERNALS                            │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│    What the container sees (merged view):                        │
+│    ┌──────────────────────────────────────────────────────────┐ │
+│    │  /                                                       │ │
+│    │  ├── bin/bash (from layer 1)                            │ │
+│    │  ├── etc/nginx/nginx.conf (from layer 3, modified)      │ │
+│    │  ├── var/log/app.log (from container layer, new file)   │ │
+│    │  └── usr/share/nginx/ (from layer 2)                    │ │
+│    └──────────────────────────────────────────────────────────┘ │
+│                              ▲                                   │
+│                              │ OverlayFS merges                  │
+│                              │                                   │
+│    ┌───────────────┐  ┌───────────────┐  ┌───────────────┐     │
+│    │ Upper (RW)    │  │               │  │               │     │
+│    │ container     │  │   Lower 3     │  │   Lower 2     │     │
+│    │ layer         │  │   (COPY)      │  │   (RUN)       │     │
+│    └───────────────┘  └───────────────┘  └───────────────┘     │
+│           ▲                  ▲                  ▲                │
+│           │                  │                  │                │
+│    ┌──────┴──────────────────┴──────────────────┴──────┐        │
+│    │                    Lower 1 (FROM)                  │        │
+│    │                    Base image layer                │        │
+│    └────────────────────────────────────────────────────┘        │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -1113,6 +1621,41 @@ docker run --mount type=tmpfs,destination=/app/temp,tmpfs-size=100m nginx
 
 Docker Compose is a tool for defining and running **multi-container Docker applications**. Instead of running each container separately with long `docker run` commands, you define your entire application stack in a single file.
 
+**The Evolution of Container Orchestration:**
+
+Docker Compose sits at an interesting point in the container orchestration spectrum:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              CONTAINER ORCHESTRATION SPECTRUM                    │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│    Simple                                            Complex     │
+│    ┌────────────────────────────────────────────────────────┐   │
+│    │                                                        │   │
+│    │  docker run  ──▶  Docker Compose  ──▶  Docker Swarm    │   │
+│    │                                            │           │   │
+│    │  Single           Multi-container         Multi-host   │   │
+│    │  container        single host             clusters     │   │
+│    │                          │                     │       │   │
+│    │                          │                     ▼       │   │
+│    │                          │              ┌──────────┐   │   │
+│    │                          │              │Kubernetes│   │   │
+│    │                          │              │  (K8s)   │   │   │
+│    │                          │              └──────────┘   │   │
+│    │                          │              Production     │   │
+│    │                          │              at scale       │   │
+│    │                          │                             │   │
+│    │                    ┌─────┴─────┐                       │   │
+│    │                    │ Sweet Spot│                       │   │
+│    │                    │ for most  │                       │   │
+│    │                    │ dev teams │                       │   │
+│    │                    └───────────┘                       │   │
+│    └────────────────────────────────────────────────────────┘   │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
 **Why Docker Compose?**
 
 | Challenge Without Compose | Solution With Compose |
@@ -1122,6 +1665,55 @@ Docker Compose is a tool for defining and running **multi-container Docker appli
 | Hard to share development environments | `docker-compose.yml` is version controlled |
 | Manual network creation and linking | Networks created automatically |
 | Inconsistent local vs team environments | Everyone uses same configuration |
+
+**The Declarative Approach:**
+
+Compose uses a **declarative model** – you describe the desired end state, not the steps to get there:
+
+| Imperative (Without Compose) | Declarative (With Compose) |
+|------------------------------|---------------------------|
+| "Create network. Start db. Wait. Start api. Configure env vars..." | "I want: web, api, db services on shared network" |
+| You manage the sequence | Compose figures out the order |
+| Easy to make mistakes | Configuration is consistent |
+| Hard to reproduce | `docker-compose up` recreates everything |
+
+**How Docker Compose Manages Lifecycle:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                 COMPOSE LIFECYCLE MANAGEMENT                     │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  docker-compose up                                               │
+│       │                                                          │
+│       ├─▶ 1. Read docker-compose.yml                            │
+│       │                                                          │
+│       ├─▶ 2. Create project network (if not exists)             │
+│       │      myapp_default                                       │
+│       │                                                          │
+│       ├─▶ 3. Create volumes (if not exists)                     │
+│       │      myapp_db_data                                       │
+│       │                                                          │
+│       ├─▶ 4. Build images (if build: specified)                 │
+│       │      Check cache, rebuild if Dockerfile changed          │
+│       │                                                          │
+│       ├─▶ 5. Create containers in dependency order              │
+│       │      db → api → web (based on depends_on)               │
+│       │                                                          │
+│       ├─▶ 6. Start containers                                   │
+│       │      Attach to network, mount volumes                    │
+│       │                                                          │
+│       └─▶ 7. Stream logs (unless -d)                            │
+│                                                                  │
+│  docker-compose down                                             │
+│       │                                                          │
+│       ├─▶ 1. Stop containers (SIGTERM, then SIGKILL)            │
+│       ├─▶ 2. Remove containers                                  │
+│       ├─▶ 3. Remove network                                     │
+│       └─▶ 4. Volumes preserved (unless -v flag)                 │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 **How Docker Compose Works:**
 
