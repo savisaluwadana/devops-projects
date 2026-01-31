@@ -23,6 +23,53 @@ A comprehensive guide covering everything you need to know about Linux for DevOp
 
 ## 1. Linux Fundamentals
 
+### The Unix Philosophy
+
+Linux inherits its design principles from Unix, developed at Bell Labs in 1969. Understanding this philosophy is key to mastering Linux:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     The Unix Philosophy                              │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  1. DO ONE THING WELL                                               │
+│     └──▶ Each program does one thing only, but does it excellently  │
+│          Example: ls (list), cat (concatenate), grep (search)       │
+│                                                                      │
+│  2. EVERYTHING IS A FILE                                            │
+│     └──▶ Files, directories, devices, sockets - all accessed        │
+│          through the same unified interface                          │
+│          Example: /dev/sda (disk), /proc/cpuinfo (CPU info)         │
+│                                                                      │
+│  3. COMPOSABILITY                                                   │
+│     └──▶ Simple tools can be combined using pipes and redirection   │
+│          Example: cat file.txt | grep "error" | wc -l               │
+│                                                                      │
+│  4. TEXT IS THE UNIVERSAL INTERFACE                                 │
+│     └──▶ Programs communicate via plain text, enabling pipelines    │
+│          Example: Configuration files, logs, command output         │
+│                                                                      │
+│  5. SILENCE IS GOLDEN                                               │
+│     └──▶ Programs produce no output unless there's something to say │
+│          Makes scripting and automation reliable                     │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Why Linux for DevOps?
+
+Linux dominates server infrastructure for good reasons:
+
+| Aspect | Why Linux Excels |
+|--------|-----------------|
+| **Cost** | Free and open source - no licensing fees |
+| **Stability** | Servers run for years without reboots |
+| **Security** | Open source = many eyes reviewing code |
+| **Flexibility** | Configure every aspect of the system |
+| **Containers** | Docker/Kubernetes are Linux-native |
+| **Cloud** | Most cloud VMs run Linux by default |
+| **Community** | Massive ecosystem of tools and support |
+
 ### Linux Distributions
 
 | Distribution | Use Case | Package Manager |
@@ -33,6 +80,8 @@ A comprehensive guide covering everything you need to know about Linux for DevOp
 | Amazon Linux | AWS environments | dnf/yum |
 
 ### Kernel Architecture
+
+The **kernel** is the core of Linux - it's the bridge between software and hardware.
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -61,6 +110,45 @@ A comprehensive guide covering everything you need to know about Linux for DevOp
 │  CPU  │  Memory  │  Storage  │  Network  │  Peripherals   │
 └────────────────────────────────────────────────────────────┘
 ```
+
+#### Kernel Component Responsibilities
+
+| Component | Responsibility | Examples |
+|-----------|---------------|----------|
+| **Process Manager** | Create, schedule, terminate processes | fork(), exec(), scheduling |
+| **Memory Manager** | Allocate/free memory, virtual memory | malloc, paging, swapping |
+| **I/O Manager** | Manage input/output operations | Buffering, caching |
+| **File Systems** | Organize data on storage | ext4, XFS, NFS |
+| **Network Stack** | TCP/IP networking | Sockets, routing, firewall |
+| **Device Drivers** | Hardware abstraction | Disk, network, USB drivers |
+
+#### System Calls: The Kernel's API
+
+User programs can't directly access hardware. They request kernel services via **system calls**:
+
+```
+┌────────────────────────────────────────────────────────────┐
+│                  System Call Execution                      │
+├────────────────────────────────────────────────────────────┤
+│                                                             │
+│  Application:  open("/etc/passwd", O_RDONLY)               │
+│       │                                                     │
+│       ▼                                                     │
+│  C Library:    Wrapper function prepares arguments         │
+│       │                                                     │
+│       ▼                                                     │
+│  System Call:  Trap to kernel mode (context switch)        │
+│       │                                                     │
+│       ▼                                                     │
+│  Kernel:       Execute sys_open(), check permissions       │
+│       │                                                     │
+│       ▼                                                     │
+│  Return:       Back to user mode with file descriptor      │
+│                                                             │
+└────────────────────────────────────────────────────────────┘
+```
+
+Common system calls: `read()`, `write()`, `open()`, `close()`, `fork()`, `exec()`, `exit()`
 
 ### Essential Commands
 
@@ -323,6 +411,83 @@ setfacl -d -m u:user:rx dir       # Default ACL for new files
 ---
 
 ## 4. Process Management
+
+### Process Lifecycle Theory
+
+A **process** is a running instance of a program. Understanding how processes work is essential for system administration and debugging.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Linux Process States                              │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│                    ┌─────────────────────┐                          │
+│       fork()      │                     │                          │
+│  ────────────────▶│    CREATED (New)    │                          │
+│                    │                     │                          │
+│                    └─────────┬───────────┘                          │
+│                              │ Admitted                             │
+│                              ▼                                       │
+│                    ┌─────────────────────┐                          │
+│                    │                     │◀──────┐                  │
+│                    │   READY (Runnable)  │       │ I/O complete     │
+│                    │                     │       │                   │
+│                    └─────────┬───────────┘       │                   │
+│           Scheduled │        ▲                   │                   │
+│                     ▼        │ Preempted         │                   │
+│                    ┌─────────────────────┐  ┌────┴────────────┐     │
+│                    │                     │  │                 │     │
+│                    │   RUNNING (Active)  │  │ WAITING/BLOCKED │     │
+│                    │                     │──▶  (I/O, Sleep)  │     │
+│                    └─────────┬───────────┘  └─────────────────┘     │
+│                              │ exit()                                │
+│                              ▼                                       │
+│                    ┌─────────────────────┐                          │
+│                    │  TERMINATED/ZOMBIE  │                          │
+│                    │   (awaiting parent) │                          │
+│                    └─────────────────────┘                          │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+#### The Fork-Exec Model
+
+Linux creates new processes using `fork()` and `exec()`:
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                   Fork-Exec Example                             │
+├────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Parent Process (PID 100)                                      │
+│         │                                                       │
+│         │ fork()                                                │
+│         │                                                       │
+│  ┌──────┴───────┐                                              │
+│  │              │                                               │
+│  ▼              ▼                                               │
+│  Parent    Child Process (PID 101)                             │
+│  (PID 100)      │                                               │
+│  continues      │ exec("/bin/bash")                            │
+│  running        │                                               │
+│                 ▼                                               │
+│           New program                                          │
+│           replaces child                                       │
+│           (still PID 101)                                      │
+│                                                                 │
+└────────────────────────────────────────────────────────────────┘
+```
+
+#### Process Scheduling: The CFS
+
+Linux uses the **Completely Fair Scheduler (CFS)** to decide which process runs when:
+
+| Concept | Description |
+|---------|-------------|
+| **Time Slice** | CPU time allocated to each process |
+| **Nice Value** | Priority (-20 to +19, lower = higher priority) |
+| **vruntime** | Virtual runtime tracks fair CPU allocation |
+| **Preemption** | Scheduler can interrupt running processes |
 
 ### Viewing Processes
 

@@ -15,12 +15,114 @@ A comprehensive guide for workflow automation with Argo Workflows.
 
 ## 1. Fundamentals
 
+### Workflow Orchestration Theory
+
+Workflow orchestration is the automated coordination of multiple tasks to achieve a complex goal. Unlike simple scripts that run tasks sequentially, workflow engines provide:
+
+- **Dependency Management**: Execute tasks based on dependencies, not order
+- **Parallelization**: Run independent tasks simultaneously
+- **Fault Tolerance**: Handle failures gracefully with retries and fallbacks
+- **Observability**: Track progress, logs, and artifacts centrally
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Why Workflow Engines?                             │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  SIMPLE SCRIPT:                        WORKFLOW ENGINE:             │
+│                                                                      │
+│  task_1()                              ┌───────┐                    │
+│  task_2()  ──▶  Sequential,            │task_1 │                    │
+│  task_3()      No parallelism          └───┬───┘                    │
+│  task_4()                              ┌───┴───┐                    │
+│                                    ┌───┴───┐   │                    │
+│                                    │task_2 │  ┌┴───────┐            │
+│                                    └───┬───┘  │task_3  │            │
+│                                        └──┬───┴────────┘            │
+│                                           │                         │
+│                                       ┌───┴───┐                     │
+│                                       │task_4 │  Parallel DAG       │
+│                                       └───────┘                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Directed Acyclic Graphs (DAGs)
+
+Argo Workflows uses **DAGs** to represent task dependencies. A DAG is a graph where:
+- **Directed**: Edges have direction (task A → task B means B depends on A)
+- **Acyclic**: No cycles (you can't have A → B → C → A)
+
+```
+           ┌─────────────────────────────────────────┐
+           │          DAG Execution Model             │
+           ├─────────────────────────────────────────┤
+           │                                          │
+           │     ┌─────┐                             │
+           │     │  A  │  Ready: no dependencies     │
+           │     └──┬──┘                             │
+           │     ┌──┴──┐                             │
+           │     ▼     ▼                             │
+           │   ┌───┐ ┌───┐  Ready when A completes   │
+           │   │ B │ │ C │                           │
+           │   └─┬─┘ └─┬─┘                           │
+           │     └──┬──┘                             │
+           │        ▼                                │
+           │      ┌───┐   Ready when B AND C done    │
+           │      │ D │                              │
+           │      └───┘                              │
+           └─────────────────────────────────────────┘
+
+Execution order: A → (B, C in parallel) → D
+```
+
+### Kubernetes Controller Pattern
+
+Argo Workflows is built on the **Kubernetes controller pattern**:
+
+1. **Custom Resource (CR)**: `Workflow` object defines desired state
+2. **Controller**: Watches for Workflow CRs and creates Pods to execute tasks
+3. **Reconciliation**: Continuously ensures actual state matches desired state
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│                 Argo Workflows Controller Pattern                   │
+├────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  User submits         Argo Controller        Kubernetes Cluster    │
+│  ┌──────────┐         ┌─────────────┐        ┌─────────────────┐  │
+│  │ Workflow │────────▶│   Watch +   │───────▶│  Create Pods    │  │
+│  │   YAML   │         │ Reconcile   │        │  for each task  │  │
+│  └──────────┘         └─────────────┘        └─────────────────┘  │
+│                              │                       │             │
+│                              │       ┌───────────────┘             │
+│                              ▼       ▼                             │
+│                        ┌─────────────────┐                        │
+│                        │ Update Workflow │                        │
+│                        │     Status      │                        │
+│                        └─────────────────┘                        │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### Comparison with Other Workflow Engines
+
+| Feature | Argo Workflows | Apache Airflow | Tekton | Jenkins |
+|---------|---------------|----------------|--------|---------|
+| Runtime | Kubernetes-native | Python workers | Kubernetes-native | JVM |
+| Definition | YAML | Python DAGs | YAML | Groovy/DSL |
+| Scalability | Pod per task | Worker-based | Pod per task | Agent-based |
+| Use Case | CI/CD, ML pipelines | Data pipelines | CI/CD | General CI/CD |
+| Learning Curve | Medium | Medium | Medium | Low-Medium |
+
 ### Key Concepts
-- **Workflow**: K8s custom resource defining execution
-- **Template**: Reusable task definition
-- **DAG**: Directed Acyclic Graph for dependencies
-- **Steps**: Sequential task execution
-- **Artifacts**: Input/output data between tasks
+
+| Concept | Description |
+|---------|-------------|
+| **Workflow** | K8s custom resource defining the complete execution |
+| **Template** | Reusable task definition (container, script, DAG, or steps) |
+| **DAG** | Directed Acyclic Graph for parallel tasks with dependencies |
+| **Steps** | Sequential task execution (can have parallel inner steps) |
+| **Artifacts** | Input/output data passed between tasks via S3, GCS, or local storage |
+| **Parameters** | Values passed between templates for dynamic configuration |
 
 ---
 

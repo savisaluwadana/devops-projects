@@ -16,11 +16,115 @@ A comprehensive guide for GitOps with ArgoCD.
 
 ## 1. Fundamentals
 
-### GitOps Principles
-- **Declarative**: Desired state in Git
-- **Versioned**: Git as source of truth
-- **Automated**: Changes applied automatically
-- **Auditable**: Git history = audit log
+### The GitOps Philosophy
+
+GitOps represents a paradigm shift in how we think about infrastructure and application deployment. Rather than imperatively telling systems what to do step-by-step, GitOps embraces a **declarative model** where we describe the desired end state and let the system figure out how to achieve it.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     Traditional vs GitOps Deployment                      │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│  TRADITIONAL (Push-based):                                               │
+│  ┌────────┐    ┌────────┐    ┌────────┐    ┌────────────┐              │
+│  │ Developer│───▶│   CI   │───▶│   CD   │───▶│ Kubernetes │              │
+│  └────────┘    └────────┘    └────────┘    └────────────┘              │
+│       │                            │                                      │
+│       └────── "Push changes to cluster" ─────┘                           │
+│                                                                           │
+│  GITOPS (Pull-based):                                                    │
+│  ┌────────┐    ┌────────┐    ┌────────┐    ┌────────────┐              │
+│  │ Developer│───▶│   CI   │───▶│  Git   │◀───│  ArgoCD    │              │
+│  └────────┘    └────────┘    └────────┘    └────────────┘              │
+│                                   │              │                        │
+│                                   │              ▼                        │
+│                              Source of      ┌────────────┐              │
+│                               Truth         │ Kubernetes │              │
+│                                             └────────────┘              │
+│                                   "Pull desired state"                   │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Why Git as the Source of Truth?
+
+1. **Version Control**: Every change is tracked with author, timestamp, and commit message
+2. **Audit Trail**: Git history provides complete audit log for compliance
+3. **Rollback Capability**: Revert to any previous state with `git revert`
+4. **Branching Strategies**: Use PRs for change review before deployment
+5. **Collaboration**: Teams can review, comment, and approve changes
+
+### GitOps Principles Deep Dive
+
+| Principle | Description | ArgoCD Implementation |
+|-----------|-------------|----------------------|
+| **Declarative** | Describe desired state, not steps | YAML manifests in Git |
+| **Versioned** | All changes tracked in Git | Git commits = deployment history |
+| **Automated** | System self-corrects to match desired state | Reconciliation loop |
+| **Auditable** | Complete history of who changed what | Git log + ArgoCD events |
+
+### The Reconciliation Loop
+
+ArgoCD's core mechanism is the **reconciliation loop** - a continuous process that compares the desired state (Git) with the actual state (cluster) and takes corrective action.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    ArgoCD Reconciliation Loop                        │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│    ┌──────────────┐                                                 │
+│    │              │                                                 │
+│    │   OBSERVE    │◀────────────────────────────────┐              │
+│    │              │                                  │              │
+│    └──────┬───────┘                                  │              │
+│           │                                          │              │
+│           │  Read desired state from Git             │              │
+│           │  Read actual state from cluster          │              │
+│           ▼                                          │              │
+│    ┌──────────────┐                                  │              │
+│    │              │                                  │              │
+│    │    DIFF      │  Compare states                  │              │
+│    │              │                                  │              │
+│    └──────┬───────┘                                  │              │
+│           │                                          │              │
+│           │  Synced? ──▶ No drift, healthy          │              │
+│           │  OutOfSync? ──▶ Drift detected          │              │
+│           ▼                                          │              │
+│    ┌──────────────┐                                  │              │
+│    │              │                                  │  Every 3min  │
+│    │     ACT      │  Apply changes if auto-sync     │  (default)   │
+│    │              │  or wait for manual sync        │              │
+│    └──────┬───────┘                                  │              │
+│           │                                          │              │
+│           └──────────────────────────────────────────┘              │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+#### Sync States Explained
+
+| State | Meaning | Action Required |
+|-------|---------|-----------------|
+| **Synced** | Cluster matches Git exactly | None |
+| **OutOfSync** | Cluster differs from Git | Sync needed |
+| **Unknown** | Cannot determine state | Check connectivity |
+| **Progressing** | Sync in progress | Wait |
+| **Degraded** | Resources unhealthy | Investigate |
+
+### Self-Healing Architecture
+
+When `selfHeal: true` is enabled, ArgoCD automatically reverts any manual changes made directly to the cluster:
+
+```
+Developer makes kubectl edit ──▶ Cluster state changes
+                                        │
+                                        ▼
+                    ArgoCD detects drift from Git
+                                        │
+                                        ▼
+                    ArgoCD reverts changes to match Git
+```
+
+This ensures that **Git remains the single source of truth** and prevents configuration drift caused by ad-hoc manual changes.
 
 ### Architecture
 ```
@@ -39,6 +143,27 @@ A comprehensive guide for GitOps with ArgoCD.
 │        └──────▶└──────────┘   └──────────┘    │
 └─────────────────────────────────────────────────┘
 ```
+
+#### Component Responsibilities
+
+| Component | Responsibility | Key Functions |
+|-----------|---------------|---------------|
+| **API Server** | User interface backend | Web UI, CLI, gRPC API, authentication, RBAC |
+| **Repo Server** | Git operations | Clone repos, render manifests (Helm, Kustomize, plain YAML) |
+| **Application Controller** | Reconciliation engine | Monitor apps, diff states, sync resources, health checks |
+| **Redis** | Caching layer | Cache repo state, reduce Git API calls |
+| **Dex (optional)** | SSO authentication | OIDC, SAML, LDAP integration |
+
+#### ArgoCD vs Other GitOps Tools
+
+| Feature | ArgoCD | Flux | Jenkins X |
+|---------|--------|------|-----------|
+| UI | Full Web UI | CLI only (add-on possible) | Web UI |
+| Multi-cluster | Native support | Requires config | Limited |
+| Sync Strategy | Pull-based | Pull-based | Push-based |
+| Helm Support | Native | Native | Native |
+| RBAC | Built-in | Kubernetes RBAC | Built-in |
+| Learning Curve | Moderate | Lower | Higher |
 
 ---
 

@@ -15,13 +15,133 @@ A comprehensive guide for CI/CD with CircleCI.
 
 ## 1. Fundamentals
 
+### CI/CD Philosophy
+
+**Continuous Integration (CI)** and **Continuous Delivery/Deployment (CD)** are practices that automate the software delivery process, reducing manual work and catching issues early.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                       The CI/CD Pipeline Flow                            │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│   Developer     Version      Build &      Deploy        Production      │
+│    Commits      Control       Test        Staging        Deploy         │
+│                                                                          │
+│  ┌────────┐   ┌────────┐   ┌────────┐   ┌────────┐   ┌────────────┐   │
+│  │  Code  │──▶│  Git   │──▶│  CI    │──▶│  CD    │──▶│ Production │   │
+│  │ Change │   │  Push  │   │ Build  │   │ Deploy │   │   Live!    │   │
+│  └────────┘   └────────┘   └────────┘   └────────┘   └────────────┘   │
+│                                │              │                         │
+│                          ┌─────┴─────┐  ┌────┴────┐                    │
+│                          │Run Tests  │  │Approval?│                    │
+│                          │Lint Code  │  │(Manual) │                    │
+│                          │Sec Scan   │  └─────────┘                    │
+│                          └───────────┘                                  │
+│                                                                          │
+│  ◀──────── Continuous Integration ────────▶│◀── Continuous Delivery ──▶│
+│                                                                          │
+│  Continuous Deployment = No manual approval, auto-deploy to production  │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### CI vs CD vs CD
+
+| Term | Definition | Automation Level |
+|------|------------|-----------------|
+| **Continuous Integration** | Frequently merge code, run automated tests | Fully automated |
+| **Continuous Delivery** | Always have deployable build, manual release | Semi-automated |
+| **Continuous Deployment** | Every passing build auto-deploys to prod | Fully automated |
+
+### How CircleCI Executes Pipelines
+
+When you push code, CircleCI:
+1. Detects the push via webhook
+2. Reads `.circleci/config.yml` from your repo
+3. Creates an execution environment (executor)
+4. Runs jobs according to your workflow definition
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│                    CircleCI Execution Model                         │
+├────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│   Git Push          CircleCI            Executor Pool              │
+│  ┌────────┐        ┌────────┐         ┌────────────────┐          │
+│  │ Webhook│───────▶│ Queue  │────────▶│   Spin up      │          │
+│  └────────┘        └────────┘         │   Environment  │          │
+│                         │              └───────┬────────┘          │
+│                         ▼                      ▼                   │
+│                   ┌──────────┐         ┌────────────────┐         │
+│                   │  Parse   │         │  Checkout      │         │
+│                   │  Config  │         │  Code          │         │
+│                   └──────────┘         └───────┬────────┘         │
+│                                                ▼                   │
+│                                         ┌────────────────┐        │
+│                                         │  Run Steps     │        │
+│                                         │  (commands)    │        │
+│                                         └───────┬────────┘        │
+│                                                 ▼                  │
+│                                         ┌────────────────┐        │
+│                                         │  Report        │        │
+│                                         │  Results       │        │
+│                                         └────────────────┘        │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### Executor Types Deep Dive
+
+CircleCI offers different execution environments:
+
+| Executor | Use Case | Pros | Cons |
+|----------|----------|------|------|
+| **Docker** | Most builds | Fast startup, cached layers, lightweight | Limited to Linux, no Docker-in-Docker |
+| **Machine** | Docker builds, system tests | Full VM, real Docker, any OS | Slower startup, more expensive |
+| **macOS** | iOS/macOS apps | Native Xcode, simulators | Limited availability, expensive |
+| **Windows** | .NET, Windows apps | Native Windows environment | Limited, expensive |
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│                    Choosing Your Executor                           │
+├────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  Need to build Docker images? ──────▶ Use 'machine' executor       │
+│                    │                                                │
+│                    │ No                                             │
+│                    ▼                                                │
+│  Building iOS/macOS app? ───────────▶ Use 'macos' executor         │
+│                    │                                                │
+│                    │ No                                             │
+│                    ▼                                                │
+│  Building Windows app? ─────────────▶ Use 'windows' executor       │
+│                    │                                                │
+│                    │ No                                             │
+│                    ▼                                                │
+│  Standard build/test ───────────────▶ Use 'docker' executor        │
+│                                       (fastest, cheapest)           │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### Comparison with Other CI Tools
+
+| Feature | CircleCI | GitHub Actions | GitLab CI | Jenkins |
+|---------|----------|----------------|-----------|---------|
+| Hosting | SaaS / Self-hosted | SaaS / Self-hosted | SaaS / Self-hosted | Self-hosted |
+| Config File | `.circleci/config.yml` | `.github/workflows/*.yml` | `.gitlab-ci.yml` | `Jenkinsfile` |
+| Pricing Model | Credits-based | Minutes-based | Minutes-based | Free (infra cost) |
+| Docker Support | Excellent | Excellent | Excellent | Good |
+| Parallelism | Native | Native | Native | Plugin |
+| Orbs/Reuse | Orbs | Actions | Components | Shared Libraries |
+
 ### Key Concepts
-- **Pipeline**: Full CI/CD run triggered by code change
-- **Workflow**: Collection of jobs with dependencies
-- **Job**: Collection of steps running in executor
-- **Step**: Individual command or script
-- **Executor**: Environment where jobs run (Docker, machine, macOS)
-- **Orb**: Reusable packages of config
+
+| Concept | Description |
+|---------|-------------|
+| **Pipeline** | Full CI/CD run triggered by code change |
+| **Workflow** | Collection of jobs with dependencies and scheduling |
+| **Job** | Collection of steps running in a single executor |
+| **Step** | Individual command or script |
+| **Executor** | Environment where jobs run (Docker, machine, macOS) |
+| **Orb** | Reusable packages of config (like npm packages for CI) |
 
 ---
 

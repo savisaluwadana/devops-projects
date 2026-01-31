@@ -121,6 +121,40 @@ The control plane makes global decisions about the cluster and responds to clust
 | **kube-controller-manager** | Runs controller processes including Node Controller, Job Controller, EndpointSlice Controller, and ServiceAccount Controller. |
 | **cloud-controller-manager** | Links your cluster into your cloud provider's API (for cloud-specific features like load balancers). |
 
+#### Control Plane Communication Flow
+
+Understanding how components communicate helps troubleshoot cluster issues:
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│              How a Pod Gets Scheduled and Created                   │
+├────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  1. kubectl apply ──▶ API Server ──▶ etcd (store manifest)        │
+│                            │                                        │
+│  2. Scheduler watches ◀───┘                                        │
+│        │                                                            │
+│        │ "New pod with no node assigned!"                          │
+│        ▼                                                            │
+│  3. Scheduler evaluates nodes (resources, affinity, taints)        │
+│        │                                                            │
+│        ▼                                                            │
+│  4. Scheduler updates pod.spec.nodeName ──▶ API Server ──▶ etcd   │
+│                                                   │                 │
+│  5. kubelet on selected node watches ◀───────────┘                 │
+│        │                                                            │
+│        │ "Pod assigned to me!"                                      │
+│        ▼                                                            │
+│  6. kubelet tells container runtime to create containers           │
+│        │                                                            │
+│        ▼                                                            │
+│  7. kubelet reports pod status ──▶ API Server ──▶ etcd             │
+│                                                                     │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+Key insight: **All components communicate through the API server** - they never talk directly to each other. This provides a single point for authentication, authorization, and auditing.
+
 ### Node Components
 
 Node components run on every node, maintaining running Pods and providing the Kubernetes runtime environment.
